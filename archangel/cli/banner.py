@@ -4,19 +4,7 @@ import os
 import shutil
 
 from rich.console import Console
-from rich.text import Text
 from rich.style import Style
-
-BANNER_ART = r"""
- █████╗ ██████╗  ██████╗██╗  ██╗ █████╗ ███╗   ██╗ ██████╗ ███████╗██╗
-██╔══██╗██╔══██╗██╔════╝██║  ██║██╔══██╗████╗  ██║██╔════╝ ██╔════╝██║
-███████║██████╔╝██║     ███████║███████║██╔██╗ ██║██║  ███╗█████╗  ██║
-██╔══██║██╔══██╗██║     ██╔══██║██╔══██║██║╚██╗██║██║   ██║██╔══╝  ██║
-██║  ██║██║  ██║╚██████╗██║  ██║██║  ██║██║ ╚████║╚██████╔╝███████╗███████╗
-╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚══════╝
-"""
-
-TAGLINE = "Opportunity is revealed to those who seek."
 
 
 def _get_terminal_width() -> int:
@@ -29,31 +17,39 @@ def _get_terminal_width() -> int:
 
 
 def render_banner(console: Console | None = None) -> None:
-    """Clear the terminal and render the Archangel banner in rich style.
-
-    The banner is rendered in a bold crimson/silver palette, with the tagline
-    displayed underneath in italic white.
-    """
+    """Clear the terminal and render the Archangel banner in rich style."""
     if console is None:
         console = Console()
 
-    # Clear screen
     os.system("cls" if os.name == "nt" else "clear")
 
     width = _get_terminal_width()
 
-    # Primary style: bold crimson with slight brightness
-    primary = Style(color="#dc143c", bold=True)
+    # Clean art — no leading/trailing newlines, no inconsistent indent
+    BANNER_LINES = [
+        " █████╗ ██████╗  ██████╗██╗  ██╗ █████╗ ███╗   ██╗ ██████╗ ███████╗██╗",
+        "██╔══██╗██╔══██╗██╔════╝██║  ██║██╔══██╗████╗  ██║██╔════╝ ██╔════╝██║",
+        "███████║██████╔╝██║     ███████║███████║██╔██╗ ██║██║  ███╗█████╗  ██║",
+        "██╔══██║██╔══██╗██║     ██╔══██║██╔══██║██║╚██╗██║██║   ██║██╔══╝  ██║",
+        "██║  ██║██║  ██║╚██████╗██║  ██║██║  ██║██║ ╚████║╚██████╔╝███████╗███████╗",
+        "╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚══════╝",
+    ]
 
-    # Secondary style: silver/grey for the tagline
-    tagline_style = Style(color="#c0c0c0", italic=True, bold=False)
+    TAGLINE = "Opportunity is revealed to those who seek."
 
-    banner_text = Text(BANNER_ART, style=primary)
-    tagline = Text(f"\n{TAGLINE}\n", style=tagline_style)
+    primary = Style(color="#ffffff", bold=True)
+    tagline_style = Style(color="#c0c0c0", italic=True)
 
-    combined = Text()
-    combined.append(banner_text)
-    combined.append(tagline)
+    # Calculate block width (longest line)
+    block_width = max(len(line) for line in BANNER_LINES)
+    padding = max(0, (width - block_width) // 2)
+    pad_str = " " * padding
 
-    console.print(combined, justify="center", width=width)
-    console.print()  # spacer
+    # Print block as one centered unit
+    for line in BANNER_LINES:
+        console.print(pad_str + line, style=primary)
+
+    # Center tagline
+    tagline_pad = max(0, (width - len(TAGLINE)) // 2)
+    console.print(" " * tagline_pad + TAGLINE, style=tagline_style)
+    console.print()
