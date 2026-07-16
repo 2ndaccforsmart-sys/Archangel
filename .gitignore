@@ -35,3 +35,7 @@ configs/local.yaml
 
 # UV
 uv.lock
+
+# Obscura binary
+tools/obscura/
+
