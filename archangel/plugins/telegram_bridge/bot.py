@@ -130,7 +130,7 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         from archangel.agents.chat import WebSearch
-        from archangel.agents.scraper import ObscuraScraper
+        from archangel.agents.scraper import SmartScraper
         from archangel.agents.chat import LLMClient
         import re
 
@@ -142,7 +142,7 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("No LinkedIn results found.")
             return
 
-        scraper = ObscuraScraper()
+        scraper = SmartScraper()
         pages = []
         all_links = []
         for url in urls[:3]:
@@ -262,8 +262,8 @@ async def scrape_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
     try:
-        from archangel.agents.scraper import ObscuraScraper
-        scraper = ObscuraScraper()
+        from archangel.agents.scraper import SmartScraper
+        scraper = SmartScraper()
 
         if mode == "basic":
             raw = scraper.fetch_text(url)
