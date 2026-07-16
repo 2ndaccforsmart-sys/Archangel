@@ -641,6 +641,27 @@ Done.
 
 ---
 
+# Telegram Remote Operations Bridge
+
+Archangel supports full interactive remote control via a Telegram bot interface whitelisted to authorized user IDs.
+
+## Features
+- **Smart routing**: Executes commands with or without the leading `/` prefix.
+- **Direct Search**: Query search tools directly via `search <query>`.
+- **LinkedIn Leads Collector**: Query LinkedIn posts via `leads <query>`, scrape matching pages, and extract structured metrics.
+- **Manual Save**: Cache leads results in memory and save them to `data/leads/` on demand using the `save` command.
+- **Scraper Modes**: Switch between `basic` (raw text), `smart` (LLM-summarized), and `continuous` (SiteMonitor tracked) modes via `mode [basic|smart|continuous]`.
+
+---
+
+# Web Scraping Engine
+
+Archangel implements a unified multi-engine scraping interface to scrape external resources quickly and reliably:
+- **Scrapling**: The primary high-performance HTTP engine for fast, static page retrievals and stealthy request fetches.
+- **Obscura**: A fallback Rust/V8-based headless browser engine used automatically for JS-heavy web pages or when fast HTTP fetches fail.
+
+---
+
 # Future
 
 - AI Outreach Agent
