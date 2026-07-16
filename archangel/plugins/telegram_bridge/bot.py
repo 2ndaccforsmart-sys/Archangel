@@ -35,6 +35,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  status - System status\n"
         "  search <query> - Search the web\n"
         "  leads <query> - Find AI automation leads on LinkedIn\n"
+        "  save - Save last leads to file\n"
         "  mode [basic|smart|continuous] - Toggle scraping mode\n"
         "  scrape <url> - Scrape a URL\n"
         "  watch <url> - Monitor a URL for changes\n"
@@ -131,22 +132,16 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from archangel.agents.chat import WebSearch
         from archangel.agents.scraper import ObscuraScraper
         from archangel.agents.chat import LLMClient
-        from pathlib import Path
-        from datetime import datetime
         import re
 
-        # Step 1: Search for LinkedIn posts
         search_query = f'{query} site:linkedin.com'
         results = WebSearch().search(search_query, max_results=5)
-
-        # Step 2: Extract URLs from results
         urls = re.findall(r'URL:\s*(https?://[^\s]+)', results)
 
         if not urls:
             await update.message.reply_text("No LinkedIn results found.")
             return
 
-        # Step 3: Scrape each URL + extract links
         scraper = ObscuraScraper()
         pages = []
         all_links = []
@@ -154,7 +149,6 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             content = scraper.fetch_text(url, timeout=20)
             if not content.startswith("Error:"):
                 pages.append(f"URL: {url}\n\n{content[:3000]}")
-                # Also fetch links to find profile URLs
                 links_output = scraper.fetch_links(url, timeout=20)
                 if not links_output.startswith("Error:"):
                     all_links.append(f"Links from {url}:\n{links_output[:2000]}")
@@ -163,7 +157,6 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Could not scrape any pages.")
             return
 
-        # Step 4: LLM extracts structured leads with profile URLs
         llm = LLMClient()
         combined_pages = "\n\n---\n\n".join(pages)
         combined_links = "\n\n".join(all_links) if all_links else "No additional links found."
@@ -171,53 +164,61 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Analyze these LinkedIn pages and extract potential leads for an AI automation service.\n\n"
             "For EACH lead, extract:\n"
             "- Company/Person name\n"
-            "- LinkedIn profile URL (look for links containing linkedin.com/in/ or linkedin.com/company/ in the links section)\n"
-            "- Post URL (the original article/post URL)\n"
+            "- LinkedIn profile URL (look for links containing linkedin.com/in/ or linkedin.com/company/ in the links)\n"
+            "- Post URL (original article/post URL)\n"
             "- What they need (pain point)\n"
             "- Why they're a good lead\n"
-            "- Contact signal (named executive, email, etc. if available)\n\n"
-            "Format as a numbered list. Be concise. Only include leads with genuine interest or need "
-            "for AI automation. Skip irrelevant results.\n\n"
+            "- Contact signal (named executive, email, etc.)\n\n"
+            "Numbered list. Be concise. Only genuine leads.\n\n"
             f"Search query: {query}\n\n"
-            f"=== PAGE CONTENT ===\n{combined_pages}\n\n"
-            f"=== EXTRACTED LINKS ===\n{combined_links}"
+            f"=== PAGES ===\n{combined_pages}\n\n"
+            f"=== LINKS ===\n{combined_links}"
         )
         response = llm.chat([{"role": "user", "content": prompt}])
 
-        # Step 5: Save leads to .txt file
-        leads_dir = Path(__file__).resolve().parents[2] / "data" / "leads"
-        leads_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_query = re.sub(r'[^\w\s-]', '', query)[:30].strip().replace(' ', '_')
-        filename = f"leads_{safe_query}_{timestamp}.txt"
-        filepath = leads_dir / filename
+        # Store in memory for later save
+        bridge = context.application.bot_data["bridge"]
+        bridge.last_leads = response
+        bridge.last_leads_query = query
 
-        file_content = (
-            f"Query: {query}\n"
-            f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"Results: {len(urls)} URLs scraped\n"
-            f"{'='*60}\n\n"
-            f"{response}\n\n"
-            f"{'='*60}\n"
-            f"Source URLs:\n"
-        )
-        for url in urls:
-            file_content += f"- {url}\n"
-
-        filepath.write_text(file_content, encoding="utf-8")
-
-        # Step 6: Send leads to Telegram + confirm file saved
-        bridge = context.application.bot_data.get("bridge")
-        header = f"🎯 Leads found for: {query}\n📁 Saved to: {filepath.name}\n\n"
+        header = f"🎯 Leads for: {query}\n\n"
         full_response = header + response
-        if bridge:
-            for part in bridge._split_message(full_response):
-                await update.message.reply_text(part)
-        else:
-            await update.message.reply_text(full_response)
+        for part in bridge._split_message(full_response):
+            await update.message.reply_text(part)
 
     except Exception as exc:
         await update.message.reply_text(f"❌ Leads search failed: {exc}")
+
+
+@auth_required
+async def save_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    bridge = context.application.bot_data.get("bridge")
+    if not bridge or not bridge.last_leads:
+        await update.message.reply_text("No leads to save. Run a leads search first.")
+        return
+
+    try:
+        from pathlib import Path
+        from datetime import datetime
+        import re
+
+        leads_dir = Path(__file__).resolve().parents[2] / "data" / "leads"
+        leads_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_query = re.sub(r'[^\w\s-]', '', bridge.last_leads_query)[:30].strip().replace(' ', '_')
+        filename = f"leads_{safe_query}_{timestamp}.txt"
+        filepath = leads_dir / filename
+
+        content = (
+            f"Query: {bridge.last_leads_query}\n"
+            f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"{'='*60}\n\n"
+            f"{bridge.last_leads}\n"
+        )
+        filepath.write_text(content, encoding="utf-8")
+        await update.message.reply_text(f"✅ Leads saved to {filepath.name}")
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Save failed: {exc}")
 
 
 
@@ -367,6 +368,8 @@ async def smart_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await search_handler(update, context)
     if lower.startswith("leads "):
         return await leads_handler(update, context)
+    if lower == "save":
+        return await save_handler(update, context)
     if lower.startswith("mode"):
         return await mode_handler(update, context)
     if lower.startswith("scrape "):
