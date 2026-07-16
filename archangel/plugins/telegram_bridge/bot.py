@@ -34,6 +34,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Commands:\n"
         "  status - System status\n"
         "  search <query> - Search the web\n"
+        "  leads <query> - Find AI automation leads on LinkedIn\n"
         "  mode [basic|smart|continuous] - Toggle scraping mode\n"
         "  scrape <url> - Scrape a URL\n"
         "  watch <url> - Monitor a URL for changes\n"
@@ -111,6 +112,76 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(results)
     except Exception as exc:
         await update.message.reply_text(f"❌ Search failed: {exc}")
+
+
+@auth_required
+async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if text.startswith("/"):
+        text = text[1:]
+    parts = text.split(None, 1)
+    if len(parts) < 2:
+        await update.message.reply_text('Usage: leads <query>\nExample: leads "AI automation"')
+        return
+
+    query = parts[1].strip().strip('"').strip("'")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+    try:
+        from archangel.agents.chat import WebSearch
+        from archangel.agents.scraper import ObscuraScraper
+        from archangel.agents.chat import LLMClient
+
+        # Step 1: Search for LinkedIn posts
+        search_query = f'{query} site:linkedin.com'
+        results = WebSearch().search(search_query, max_results=5)
+
+        # Step 2: Extract URLs from results
+        import re
+        urls = re.findall(r'URL:\s*(https?://[^\s]+)', results)
+
+        if not urls:
+            await update.message.reply_text("No LinkedIn results found.")
+            return
+
+        # Step 3: Scrape each URL
+        scraper = ObscuraScraper()
+        pages = []
+        for url in urls[:3]:  # Limit to 3 to avoid timeout
+            content = scraper.fetch_text(url, timeout=20)
+            if not content.startswith("Error:"):
+                pages.append(f"URL: {url}\n\n{content[:3000]}")
+
+        if not pages:
+            await update.message.reply_text("Could not scrape any pages.")
+            return
+
+        # Step 4: LLM extracts structured leads
+        llm = LLMClient()
+        combined = "\n\n---\n\n".join(pages)
+        prompt = (
+            "Analyze these LinkedIn pages and extract potential leads for an AI automation service. "
+            "For each lead, return:\n"
+            "- Company/Person name\n"
+            "- What they need (pain point)\n"
+            "- Why they're a good lead\n"
+            "- Contact signal (if any)\n"
+            "- URL\n\n"
+            "Format as a numbered list. Be concise. Only include leads that show genuine interest "
+            "or need for AI automation. Skip irrelevant results.\n\n"
+            f"Search query: {query}\n\nPages:\n{combined}"
+        )
+        response = llm.chat([{"role": "user", "content": prompt}])
+
+        bridge = context.application.bot_data.get("bridge")
+        if bridge:
+            for part in bridge._split_message(response):
+                await update.message.reply_text(part)
+        else:
+            await update.message.reply_text(response)
+
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Leads search failed: {exc}")
 
 
 @auth_required
@@ -257,6 +328,8 @@ async def smart_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await scan_handler(update, context)
     if lower.startswith("search "):
         return await search_handler(update, context)
+    if lower.startswith("leads "):
+        return await leads_handler(update, context)
     if lower.startswith("mode"):
         return await mode_handler(update, context)
     if lower.startswith("scrape "):
