@@ -1,7 +1,7 @@
 import logging
 import asyncio
 import re
-from typing import Dict, List
+from typing import Dict, List, Optional
 from archangel.agents.chat import (
     LLMClient,
     CommandExecutor,
@@ -10,6 +10,8 @@ from archangel.agents.chat import (
     extract_search_queries,
 )
 from .auth import is_authorized
+from archangel.agents.scraper import ObscuraScraper
+from archangel.agents.monitor import SiteMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +149,14 @@ class Bridge:
         self.llm = LLMClient()
         self.executor = CommandExecutor()
         self.histories: Dict[int, List[Dict[str, str]]] = {}
+        self.modes: Dict[int, str] = {}
+        self.monitor: Optional[SiteMonitor] = None
+
+    def get_mode(self, user_id: int) -> str:
+        return self.modes.get(user_id, "basic")
+
+    def set_mode(self, user_id: int, mode: str):
+        self.modes[user_id] = mode
 
     def get_history(self, user_id: int) -> List[Dict[str, str]]:
         if user_id not in self.histories:
