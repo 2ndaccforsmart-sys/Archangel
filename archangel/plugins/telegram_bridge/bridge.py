@@ -162,6 +162,8 @@ class Bridge:
         self.histories: Dict[int, List[Dict[str, str]]] = {}
         self.modes: Dict[int, str] = {}
         self.monitor: Optional[SiteMonitor] = None
+        self.last_leads: Optional[str] = None
+        self.last_leads_query: Optional[str] = None
 
     def get_mode(self, user_id: int) -> str:
         return self.modes.get(user_id, "basic")
