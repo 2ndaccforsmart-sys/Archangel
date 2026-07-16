@@ -143,10 +143,36 @@ class SmartScraper:
     def fetch_markdown(self, url, timeout=30):
         return self.obscura.fetch_markdown(url, timeout)
 
-    def fetch_x_search(self, query: str, timeout: int = 30) -> str:
-        """Fetch X/Twitter live search — HTML dump since X is JS-rendered."""
-        url = f"https://x.com/search?q={query.replace(' ', '%20')}&src=typed_query&f=live"
-        html = self.obscura.fetch_html(url, timeout)
-        if html and not html.startswith("Error:") and "JavaScript is not available" not in html:
-            return html
-        return html if html else "Error: Could not fetch X search"
+    def fetch_tweet(self, url: str, timeout: int = 20) -> str:
+        """Fetch tweet content via fxtwitter.com mirror."""
+        fx_url = (
+            url.replace("https://x.com/", "https://fxtwitter.com/")
+               .replace("https://twitter.com/", "https://fxtwitter.com/")
+        )
+        # Try Scrapling first (fast HTTP)
+        if not self.scrapling._init_failed:
+            try:
+                page = self.scrapling._fetcher_cls.get(fx_url, timeout=timeout, stealthy_headers=True)
+                text = page.get_all_text(separator="\n", strip=True)
+                if text:
+                    return text
+            except Exception:
+                pass
+        # Fallback: Obscura
+        return self.obscura.fetch_text(fx_url, timeout)
+
+    def fetch_x_search_via_ddg(self, query: str, max_results: int = 5) -> list:
+        """Search X/Twitter via DuckDuckGo then fetch tweets via fxtwitter."""
+        from archangel.agents.chat import WebSearch
+        import re
+
+        results = WebSearch().search(f"{query} site:x.com", max_results=max_results)
+        urls = re.findall(r"URL:\s*(https?://[^\s]+)", results)
+
+        tweets = []
+        for url in urls[:3]:
+            if "x.com" in url or "twitter.com" in url:
+                content = self.fetch_tweet(url)
+                if content and not content.startswith("Error:"):
+                    tweets.append({"url": url, "content": content[:3000]})
+        return tweets

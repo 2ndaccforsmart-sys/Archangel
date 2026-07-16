@@ -226,25 +226,25 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_x = site_domain and ("x.com" in site_domain or "twitter" in site_domain)
 
         if is_x:
-            # 2a: Search X directly via HTML dump (handles JS-rendered content)
-            await progress.update("🔍 Searching X/Twitter directly...")
-            x_content = scraper.fetch_x_search(search_terms, timeout=30)
-            if x_content and not x_content.startswith("Error:"):
-                combined_content += f"=== X/TWITTER LIVE SEARCH ===\n{x_content[:6000]}\n\n"
-            else:
-                combined_content += "=== X/TWITTER LIVE SEARCH ===\nNo results from X search.\n\n"
+            # Search X via DuckDuckGo + fetch content via fxtwitter mirror
+            await progress.update("🔍 Searching X/Twitter via DuckDuckGo...")
+            x_tweets = scraper.fetch_x_search_via_ddg(search_terms, max_results=5)
 
-            # 2b: Search Reddit via DuckDuckGo
-            await progress.update("🔍 Fetching Reddit discussions...")
+            if x_tweets:
+                tweet_content = "\n\n---\n\n".join(
+                    [f"URL: {t['url']}\n\n{t['content']}" for t in x_tweets]
+                )
+                combined_content += f"=== X/TWITTER POSTS (via fxtwitter) ===\n{tweet_content[:6000]}\n\n"
+            else:
+                combined_content += "=== X/TWITTER ===\nNo tweet content found.\n\n"
+
+            # Reddit: DDG snippets only — no direct scraping (blocked)
+            await progress.update("🔍 Searching Reddit discussions...")
             reddit_results = WebSearch().search(f'{search_terms} site:reddit.com', max_results=5)
             reddit_urls = re.findall(r'URL:\s*(https?://[^\s]+)', reddit_results)
-            reddit_pages = []
-            for url in reddit_urls[:3]:
-                content = scraper.fetch_text(url, timeout=20)
-                if content and not content.startswith("Error:"):
-                    reddit_pages.append(f"URL: {url}\n\n{content[:3000]}")
-            if reddit_pages:
-                combined_content += f"=== REDDIT DISCUSSIONS ===\n{'---'.join(reddit_pages)}\n\n"
+            if reddit_urls:
+                reddit_links = "\n".join(f"Reddit result: {url}" for url in reddit_urls[:5])
+                combined_content += f"=== REDDIT DISCUSSIONS (DuckDuckGo) ===\n{reddit_links}\n\n"
 
         else:
             if site_domain:
@@ -285,7 +285,12 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Context hint based on site
         if is_x:
-            context_hint = "Look for tweets from real users expressing pain points, asking for help, seeking developers, or discussing automation needs. Focus on individual users, not corporate accounts."
+            context_hint = (
+                "Look for tweets from real users expressing pain points, asking for help, "
+                "seeking developers, or discussing automation needs. "
+                "Focus on individual users, not corporate accounts or bots. "
+                "Each tweet includes author, text, and engagement metrics."
+            )
         elif site_domain:
             if "discord" in site_domain:
                 context_hint = "Look for people asking for help, seeking automation services, or discussing pain points in Discord servers."
