@@ -21,6 +21,7 @@ dependencies = [
     "pyautogui>=0.9.54",
     "Pillow>=10.0.0",
     "python-telegram-bot>=21.0",
+    "scrapling>=0.4.0",
 ]
 
 [project.scripts]
