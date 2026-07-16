@@ -33,6 +33,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Archangle Online.\n\n"
         "Commands:\n"
         "  status - System status\n"
+        "  search <query> - Search the web\n"
         "  mode [basic|smart|continuous] - Toggle scraping mode\n"
         "  scrape <url> - Scrape a URL\n"
         "  watch <url> - Monitor a URL for changes\n"
@@ -85,6 +86,31 @@ async def scan_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("\n".join(lines))
     except Exception as exc:
         await update.message.reply_text(f"❌ Scan failed: {exc}")
+
+
+@auth_required
+async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if text.startswith("/"):
+        text = text[1:]
+    parts = text.split(None, 1)
+    if len(parts) < 2:
+        await update.message.reply_text("Usage: search <query>")
+        return
+
+    query = parts[1].strip()
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    try:
+        from archangel.agents.chat import WebSearch
+        results = WebSearch().search(query, max_results=5)
+        bridge = context.application.bot_data.get("bridge")
+        if bridge:
+            for part in bridge._split_message(results):
+                await update.message.reply_text(part)
+        else:
+            await update.message.reply_text(results)
+    except Exception as exc:
+        await update.message.reply_text(f"❌ Search failed: {exc}")
 
 
 @auth_required
@@ -229,6 +255,8 @@ async def smart_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await help_handler(update, context)
     if lower == "scan" or lower.startswith("scan "):
         return await scan_handler(update, context)
+    if lower.startswith("search "):
+        return await search_handler(update, context)
     if lower.startswith("mode"):
         return await mode_handler(update, context)
     if lower.startswith("scrape "):
