@@ -204,7 +204,7 @@ class Bridge:
                         })
                     continue
 
-                  # Check for execute tags
+                # Check for execute tags
                 commands = extract_execute_commands(response_text)
                 if not commands:
                     break
