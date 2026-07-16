@@ -24,9 +24,19 @@ class ObscuraScraper:
         try:
             result = subprocess.run(
                 [self._obscura] + args,
-                capture_output=True, text=True, timeout=timeout
+                capture_output=True, timeout=timeout
             )
-            return result.stdout.strip() if result.returncode == 0 else f"Error: {result.stderr.strip()}"
+            try:
+                stdout = result.stdout.decode("utf-8", errors="replace").strip()
+            except Exception:
+                stdout = result.stdout.decode("latin-1", errors="replace").strip()
+            if result.returncode == 0:
+                return stdout
+            try:
+                stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            except Exception:
+                stderr = result.stderr.decode("latin-1", errors="replace").strip()
+            return f"Error: {stderr}"
         except subprocess.TimeoutExpired:
             return "Error: obscura command timed out"
         except Exception as exc:
