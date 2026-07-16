@@ -34,7 +34,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Commands:\n"
         "  status - System status\n"
         "  search <query> - Search the web\n"
-        "  leads <query> [site:<platform>] - Find leads on any platform\n"
+        "  leads <query> [site:<platform>] - Find leads (describe naturally)\n"
         "  save - Save last leads to file\n"
         "  mode [basic|smart|continuous] - Toggle scraping mode\n"
         "  scrape <url> - Scrape a URL\n"
@@ -115,43 +115,37 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Search failed: {exc}")
 
 
-SITE_SHORTCUTS = {
-    "linkedin": "linkedin.com",
-    "reddit": "reddit.com",
-    "discord": "discord.com",
-    "x": "x.com",
-    "twitter": "x.com",
-    "github": "github.com",
-    "stackoverflow": "stackoverflow.com",
-    "quora": "quora.com",
-    "medium": "medium.com",
-    "producthunt": "producthunt.com",
-    "indiehackers": "indiehackers.com",
-    "hackernews": "news.ycombinator.com",
-    "facebook": "facebook.com",
-    "instagram": "instagram.com",
-    "youtube": "youtube.com",
-}
-
-
-def _parse_site_filter(query: str):
-    """Extract site: parameter from query. Returns (cleaned_query, site_filter_or_None)."""
+def _parse_leads_query(raw: str) -> dict:
+    """Use LLM to parse user's raw message into structured search fields."""
+    import json
     import re
-    # Check known shortcuts first
-    lower = query.lower()
-    for key, domain in SITE_SHORTCUTS.items():
-        pattern = f"site:{key}"
-        if pattern in lower:
-            idx = lower.index(pattern)
-            cleaned = (query[:idx] + query[idx + len(pattern):]).strip()
-            return cleaned, f"site:{domain}"
-    # Check raw domain (e.g., site:customsite.com)
-    match = re.search(r'site:(\S+)', query, re.IGNORECASE)
-    if match:
-        domain = match.group(1)
-        cleaned = (query[:match.start()] + query[match.end():]).strip()
-        return cleaned, f"site:{domain}"
-    return query, None
+    from archangel.agents.chat import LLMClient
+
+    llm = LLMClient()
+    prompt = (
+        "Parse this user message into structured fields for a web search. Return ONLY valid JSON.\n\n"
+        "Fields:\n"
+        "- query: the core search terms (short, clean, what to search for)\n"
+        "- site: the domain to search on (e.g. linkedin.com, reddit.com, x.com, discord.com) or null if not specified\n"
+        "- instructions: any extra requirements the user mentioned (budget, timing, comment count, post age, etc.) or null\n\n"
+        "Rules:\n"
+        "- query should be SHORT and CLEAN — just the search terms, no instructions\n"
+        "- site should be a DOMAIN not a platform name (x.com not X, reddit.com not Reddit)\n"
+        "- instructions captures everything the user wants beyond the basic search\n"
+        "- If user says 'site: X' or 'site: discord', map to domain (x.com, discord.com)\n\n"
+        f"User message: {raw}\n\n"
+        'Return JSON: {"query": "...", "site": "...", "instructions": "..."}'
+    )
+
+    response = llm.chat([{"role": "user", "content": prompt}])
+
+    json_match = re.search(r'\{.*\}', response, re.DOTALL)
+    if json_match:
+        try:
+            return json.loads(json_match.group())
+        except json.JSONDecodeError:
+            pass
+    return {"query": raw, "site": None, "instructions": None}
 
 
 @auth_required
@@ -163,17 +157,16 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(parts) < 2:
         await update.message.reply_text(
             'Usage: leads <query> [site:<platform>]\n\n'
-            'Sites: linkedin, reddit, discord, x, github, medium, producthunt\n'
-            'Or use any domain: site:customsite.com\n\n'
-            'Examples:\n'
+            'Just describe what you want naturally:\n'
             '  leads "AI automation" site:discord\n'
-            '  leads "chatbot" site:linkedin\n'
-            '  leads "python freelance" site:customsite.com'
+            '  leads easy discord bots site: X budget 300-1000$, early posts, zero comments\n'
+            '  leads python freelance work\n\n'
+            'Supported sites: linkedin, reddit, discord, x, github, stackoverflow, medium\n'
+            'Or use any domain: site:customsite.com'
         )
         return
 
     raw_query = parts[1].strip().strip('"').strip("'")
-    query, site_filter = _parse_site_filter(raw_query)
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
@@ -182,12 +175,19 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from archangel.agents.scraper import SmartScraper
         import re
 
-        # Build search query
-        if site_filter:
-            search_query = f'{query} {site_filter}'
-        else:
-            search_query = query
+        # Step 1: LLM parses the raw message
+        parsed = _parse_leads_query(raw_query)
+        search_terms = parsed.get("query", raw_query)
+        site_domain = parsed.get("site")
+        instructions = parsed.get("instructions")
 
+        # Step 2: Build clean search query
+        if site_domain:
+            search_query = f'{search_terms} site:{site_domain}'
+        else:
+            search_query = search_terms
+
+        # Step 3: Search
         results = WebSearch().search(search_query, max_results=5)
         urls = re.findall(r'URL:\s*(https?://[^\s]+)', results)
 
@@ -195,7 +195,7 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("No results found.")
             return
 
-        # Scrape each URL
+        # Step 4: Scrape URLs
         scraper = SmartScraper()
         pages = []
         all_links = []
@@ -211,49 +211,61 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Could not scrape any pages.")
             return
 
-        # Build context-aware prompt based on site
-        if site_filter and "discord" in site_filter:
-            context_hint = "Look for people asking for help, seeking automation services, or discussing pain points in Discord servers."
-        elif site_filter and "reddit" in site_filter:
-            context_hint = "Look for Reddit threads where people are asking for recommendations, expressing frustration, or seeking automation solutions."
-        elif site_filter and "linkedin" in site_filter:
-            context_hint = "Look for LinkedIn posts or articles where companies express AI automation needs or executives discuss digital transformation."
-        elif site_filter and ("x.com" in site_filter or "twitter" in site_filter):
-            context_hint = "Look for tweets expressing pain points, asking for recommendations, or discussing automation needs."
-        elif site_filter and "github" in site_filter:
-            context_hint = "Look for GitHub issues, discussions, or repos where people need automation help or are building related tools."
-        elif site_filter and "stackoverflow" in site_filter:
-            context_hint = "Look for StackOverflow questions where people struggle with automation, AI integration, or repetitive tasks."
+        # Step 5: Context hint based on site
+        if site_domain:
+            if "discord" in site_domain:
+                context_hint = "Look for people asking for help, seeking automation services, or discussing pain points in Discord servers."
+            elif "reddit" in site_domain:
+                context_hint = "Look for Reddit threads where people are asking for recommendations, expressing frustration, or seeking automation solutions."
+            elif "linkedin" in site_domain:
+                context_hint = "Look for LinkedIn posts or articles where companies express AI automation needs or executives discuss digital transformation."
+            elif "x.com" in site_domain or "twitter" in site_domain:
+                context_hint = "Look for tweets expressing pain points, asking for recommendations, or discussing automation needs."
+            elif "github" in site_domain:
+                context_hint = "Look for GitHub issues, discussions, or repos where people need automation help."
+            elif "stackoverflow" in site_domain:
+                context_hint = "Look for StackOverflow questions where people struggle with automation or repetitive tasks."
+            else:
+                context_hint = f"Look for people or companies on {site_domain} showing interest in or need for AI automation services."
         else:
             context_hint = "Find people or companies showing interest in or need for AI automation services."
 
+        # Step 6: LLM extracts leads
         llm = LLMClient()
         combined_pages = "\n\n---\n\n".join(pages)
         combined_links = "\n\n".join(all_links) if all_links else "No additional links found."
+
         prompt = (
             f"Analyze these search results and extract potential leads for an AI automation service.\n"
             f"{context_hint}\n\n"
+        )
+        if instructions:
+            prompt += f"User's specific requirements: {instructions}\n\n"
+
+        prompt += (
             "For EACH lead, extract:\n"
             "- Company/Person name\n"
-            "- Profile URL (if available — look for linkedin.com/in/, discord handles, reddit usernames, twitter handles)\n"
+            "- Profile URL (linkedin.com/in/, discord handle, reddit username, twitter handle, etc.)\n"
             "- Post/Content URL\n"
             "- What they need (pain point)\n"
             "- Why they're a good lead\n"
             "- Contact signal (named person, handle, email, etc.)\n\n"
-            "Numbered list. Be concise. Only genuine leads.\n\n"
+            "Numbered list. Be concise. Only genuine leads showing real interest or need.\n"
+            "Skip irrelevant results (blog posts, directories, marketing content).\n\n"
             f"Search: {search_query}\n\n"
             f"=== PAGES ===\n{combined_pages}\n\n"
             f"=== LINKS ===\n{combined_links}"
         )
         response = llm.chat([{"role": "user", "content": prompt}])
 
-        # Store in memory for save command
+        # Step 7: Store for save command
         bridge = context.application.bot_data["bridge"]
         bridge.last_leads = response
         bridge.last_leads_query = raw_query
 
-        site_label = f" on {site_filter}" if site_filter else ""
-        header = f"🎯 Leads for: {query}{site_label}\n\n"
+        # Step 8: Send to Telegram
+        site_label = f" on {site_domain}" if site_domain else ""
+        header = f"🎯 Leads for: {search_terms}{site_label}\n\n"
         full_response = header + response
         for part in bridge._split_message(full_response):
             await update.message.reply_text(part)
