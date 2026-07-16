@@ -1,7 +1,7 @@
 """Vision model integration — sends screenshots to AI and parses actions.
 
-Supports Gemini (primary) and Groq (fallback) for vision analysis.
-Uses plain requests — no heavy SDK imports.
+Supports Gemini (primary), Groq (fallback), and OpenRouter (secondary fallback)
+for vision analysis. Uses plain requests — no heavy SDK imports.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Any
 
 import requests
@@ -23,6 +24,7 @@ Actions:
 {"action": "key", "key": string}
 {"action": "hotkey", "keys": [string, ...]}
 {"action": "drag", "dx": number, "dy": number}
+{"action": "move", "x": number, "y": number}
 {"action": "done", "summary": string}
 
 Example: {"action": "click", "x": 500, "y": 300}
@@ -100,7 +102,7 @@ def _call_groq(image_b64: str, task: str, history: list[dict]) -> str:
         resp = requests.post(
             url,
             json={
-                "model": "llama-3.2-90b-vision-preview",
+                "model": "meta-llama/llama-4-scout-17b-16e-instruct",
                 "messages": messages,
                 "max_tokens": 512,
             },
@@ -117,6 +119,55 @@ def _call_groq(image_b64: str, task: str, history: list[dict]) -> str:
         return f"[API_ERROR] Groq: {exc}"
 
 
+def _call_openrouter(image_b64: str, task: str, history: list[dict]) -> str:
+    """Send screenshot to OpenRouter vision endpoint (OpenAI-compatible)."""
+    api_key = os.environ.get("OPENROUTER")
+    if not api_key:
+        return ""
+
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "system",
+            "content": _VISION_SYSTEM_PROMPT,
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"Task: {task}"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{image_b64}",
+                    },
+                },
+            ],
+        },
+    ]
+
+    try:
+        resp = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            json={
+                "model": "google/gemma-4-31b-it:free",
+                "messages": messages,
+                "max_tokens": 512,
+            },
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "HTTP-Referer": "https://github.com/2ndaccforsmart-sys/Archangel",
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        choices = data.get("choices", [])
+        if not choices:
+            return ""
+        return choices[0].get("message", {}).get("content", "")
+    except Exception as exc:
+        return f"[API_ERROR] OpenRouter: {exc}"
+
+
 def analyze_frame(
     image_b64: str,
     task: str,
@@ -126,21 +177,60 @@ def analyze_frame(
     """Send screenshot to vision model, return parsed action dict.
 
     Tries primary provider first, falls back to secondary if primary fails.
+    Includes retry logic with backoff for rate limits (429 errors).
     Returns a dict with at minimum {"action": "done", "summary": "error msg"}
     on failure.
     """
     raw = ""
 
     if provider == "gemini":
-        raw = _call_gemini(image_b64, task, history)
-        if not raw or raw.startswith("[API_ERROR]"):
-            raw = _call_groq(image_b64, task, history)
+        # Retry Gemini up to 3 times with backoff on 429
+        for attempt, wait in [(1, 0), (2, 5), (3, 10)]:
+            raw = _call_gemini(image_b64, task, history)
+            if raw.startswith("[API_ERROR]") and "429" in raw and attempt < 3:
+                time.sleep(wait)
+                continue
+            break
+
+        # If Gemini failed, try Groq as fallback
+        if (not raw or raw.startswith("[API_ERROR]")) and os.environ.get("GROQ"):
+            for attempt, wait in [(1, 0), (2, 5), (3, 10)]:
+                raw = _call_groq(image_b64, task, history)
+                if raw.startswith("[API_ERROR]") and "429" in raw and attempt < 3:
+                    time.sleep(wait)
+                    continue
+                break
+
+        # If Groq failed, try OpenRouter as secondary fallback
+        if (not raw or raw.startswith("[API_ERROR]")) and os.environ.get("OPENROUTER"):
+            raw = _call_openrouter(image_b64, task, history)
 
     elif provider == "groq":
-        raw = _call_groq(image_b64, task, history)
+        # Retry Groq up to 3 times with backoff on 429
+        for attempt, wait in [(1, 0), (2, 5), (3, 10)]:
+            raw = _call_groq(image_b64, task, history)
+            if raw.startswith("[API_ERROR]") and "429" in raw and attempt < 3:
+                time.sleep(wait)
+                continue
+            break
+
+        # If Groq failed, try OpenRouter as fallback
+        if (not raw or raw.startswith("[API_ERROR]")) and os.environ.get("OPENROUTER"):
+            raw = _call_openrouter(image_b64, task, history)
+
+    elif provider == "openrouter":
+        raw = _call_openrouter(image_b64, task, history)
 
     if not raw or raw.startswith("[API_ERROR]"):
-        return {"action": "done", "summary": f"Vision API error: {raw}"}
+        # Provide user-friendly error message
+        error_msg = raw if raw else "No response from vision API"
+        if "429" in error_msg:
+            error_msg = "Rate limit exceeded. Waiting before retry..."
+        elif "401" in error_msg:
+            error_msg = "Invalid API key. Please check your .env file."
+        elif "403" in error_msg:
+            error_msg = "API access denied. Check your API key permissions."
+        return {"action": "done", "summary": f"Vision API error: {error_msg}"}
 
     return parse_action(raw)
 
@@ -181,7 +271,7 @@ def parse_action(response: str) -> dict[str, Any]:
         if "action" in line:
             for a in (
                 "click", "double_click", "type", "scroll",
-                "key", "hotkey", "drag", "done",
+                "key", "hotkey", "drag", "move", "done",
             ):
                 if a in line:
                     action_map["action"] = a

@@ -43,7 +43,7 @@ def cmd_env(args: list[str], console: Any, history: list) -> bool:
     return False
 
 
-_KEY_PROVIDERS = ["GROQ", "GEMINI", "OPENAI", "ANTHROPIC"]
+_KEY_PROVIDERS = ["GROQ", "GEMINI", "OPENAI", "ANTHROPIC", "OPENROUTER", "OPENCODEZEN"]
 
 
 def cmd_key(args: list[str], console: Any, history: list) -> bool:
@@ -148,7 +148,7 @@ def cmd_models(args: list[str], console: Any, history: list) -> bool:
     """List providers, show status, or switch provider."""
     from archangel.agents.chat import PROVIDER_MAP
 
-    _api_keys = ["GROQ", "GEMINI", "OPENAI", "ANTHROPIC"]
+    _api_keys = ["OPENCODEZEN", "OPENROUTER", "GROQ", "GEMINI", "OPENAI", "ANTHROPIC"]
 
     # --- existing non-interactive modes ---
     if args:
@@ -180,11 +180,24 @@ def cmd_models(args: list[str], console: Any, history: list) -> bool:
             console.print("[bold]archangel>[/] [dim]Provider updated. Next message will use new model.[/]")
             return False
 
+        # Allow shorthand: /models opencodezen = /models change opencodezen
+        if args[0].upper() in PROVIDER_MAP:
+            provider = args[0].upper()
+            if not os.environ.get(provider):
+                console.print(f"[bold]archangel>[/] [red]No API key set for {provider}. Add {provider}=your_key to .env first.[/]")
+                return False
+
+            env_path = _get_project_root() / ".env"
+            _save_provider_to_env(provider, env_path)
+            console.print(f"[bold]archangel>[/] [green]Switched to {provider} ({PROVIDER_MAP[provider]['model']})[/]")
+            console.print("[bold]archangel>[/] [dim]Provider updated. Next message will use new model.[/]")
+            return False
+
         if args[0] == "groq":
             _list_groq_models(console)
             return False
 
-        console.print("[bold]archangel>[/] Usage: /models [status|change <provider>|groq]")
+        console.print(f"[bold]archangel>[/] Usage: /models [status|change <provider>|{'|'.join(_api_keys)}]")
         return False
 
     # --- interactive picker ---

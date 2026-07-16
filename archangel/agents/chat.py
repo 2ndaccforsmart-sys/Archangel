@@ -43,6 +43,16 @@ PROVIDER_MAP: dict[str, dict[str, Any]] = {
         "package": "anthropic",
         "model": "claude-3-5-sonnet-20241022",
     },
+    "OPENROUTER": {
+        "package": "openai",
+        "base_url": "https://openrouter.ai/api/v1",
+        "model": "google/gemma-4-31b-it:free",
+    },
+    "OPENCODEZEN": {
+        "package": "openai",
+        "base_url": "https://opencode.ai/zen/v1",
+        "model": "mimo-v2.5-free",
+    },
 }
 
 # Blocked command patterns (case-insensitive substring match)
@@ -224,7 +234,7 @@ class LLMClient:
             return
 
         # Fallback: scan in priority order
-        for key in ("GROQ", "GEMINI", "OPENAI", "ANTHROPIC"):
+        for key in ("OPENCODEZEN", "OPENROUTER", "GROQ", "GEMINI", "OPENAI", "ANTHROPIC"):
             api_key = os.environ.get(key)
             if not api_key:
                 continue
@@ -235,14 +245,14 @@ class LLMClient:
             return
 
         raise RuntimeError(
-            "No API key found. Set one of GROQ, GEMINI, OPENAI, or "
-            "ANTHROPIC in your environment or .env file."
+            "No API key found. Set one of GROQ, GEMINI, OPENAI, ANTHROPIC, "
+            "OPENROUTER, or OPENCODEZEN in your environment or .env file."
         )
 
     def _init_client(self, key: str, api_key: str, info: dict[str, Any]) -> None:
         base_url = info.get("base_url")
 
-        if key == "GROQ":
+        if key in ("GROQ", "OPENROUTER", "OPENCODEZEN"):
             from openai import OpenAI
 
             self._client = OpenAI(api_key=api_key, base_url=base_url)
@@ -263,7 +273,7 @@ class LLMClient:
 
     def supports_vision(self) -> bool:
         """Check if the current provider supports image/vision input."""
-        return self.provider in ("GEMINI", "OPENAI", "ANTHROPIC")
+        return self.provider in ("GEMINI", "OPENAI", "ANTHROPIC", "OPENROUTER", "GROQ", "OPENCODEZEN")
 
     def switch_provider(self, provider: str | None = None) -> None:
         """Switch provider only if it actually changed.
@@ -288,7 +298,7 @@ class LLMClient:
     def chat(self, messages: list[dict[str, str]]) -> str:
         """Send a message list to the provider and return the response text."""
         try:
-            if self.provider == "GROQ":
+            if self.provider in ("GROQ", "OPENROUTER", "OPENCODEZEN"):
                 response = self._client.chat.completions.create(
                     model=self.model,
                     messages=messages,
@@ -340,7 +350,7 @@ class LLMClient:
         except Exception as exc:
             if "429" in str(exc) or "quota" in str(exc).lower():
                 # Auto-fallback to next available provider on quota/rate-limit
-                fallback_order = ["GROQ", "GEMINI", "OPENAI", "ANTHROPIC"]
+                fallback_order = ["GROQ", "OPENCODEZEN", "OPENROUTER", "GEMINI", "OPENAI", "ANTHROPIC"]
                 for next_provider in fallback_order:
                     if next_provider != self.provider and os.environ.get(next_provider):
                         self.switch_provider(next_provider)
@@ -370,7 +380,70 @@ def extract_search_queries(text: str) -> list[str]:
 
 SCREENSHOT_RE = re.compile(r"<screenshot></screenshot>", re.DOTALL)
 
+# Fallback: catch wrong formats like  or <screenshot></screenshot>
+_SCREENSHOT_FALLBACK_RE = re.compile(
+    r"<tool>\s*(?:\[thinking\].*?</thinking>\s*)?\[screenshot\]\s*</tool>|<screenshot>|<screenshot></screenshot>",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 def extract_screenshot_requests(text: str) -> list[str]:
-    """Return all <screenshot></screenshot> blocks found in text."""
-    return [block.strip() for block in SCREENSHOT_RE.findall(text)]
+    """Return all screenshot requests found in text (correct or fallback formats)."""
+    # Try correct format first
+    results = SCREENSHOT_RE.findall(text)
+    if results:
+        return [block.strip() for block in results]
+    # Fallback: catch wrong formats
+    return [block.strip() for block in _SCREENSHOT_FALLBACK_RE.findall(text)]
+
+
+AUTOMATE_RE = re.compile(r"<automate>(.*?)</automate>", re.DOTALL)
+
+# Fallback: catch wrong formats like  or <pyautogui_call>
+_AUTOMATE_FALLBACK_RE = re.compile(
+    r"<tool>\s*(?:\[thinking\].*?</thinking>\s*)?\[([^\]]+)\]\s*</tool>|<pyautogui_call>(.*?)</pyautogui_call>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def extract_automate_requests(text: str) -> list[str]:
+    """Return all <automate>...</automate> blocks found in text (correct or fallback formats)."""
+    # Try correct format first
+    results = AUTOMATE_RE.findall(text)
+    if results:
+        return [block.strip() for block in results]
+    # Fallback: catch wrong formats (exclude screenshot matches)
+    fallback = _AUTOMATE_FALLBACK_RE.findall(text)
+    results = []
+    for command_name, pyautogui_content in fallback:
+        content = command_name or pyautogui_content
+        if content and content.strip().lower() != "screenshot":
+            results.append(content.strip())
+    return results
+
+
+class Automator:
+    """Run autonomous GUI automation via the gui_control plugin."""
+
+    @staticmethod
+    def run(task: str, max_steps: int = 50, dry_run: bool = False) -> str:
+        """Execute a GUI automation task using the gui_control plugin.
+
+        Args:
+            task: Natural-language task description.
+            max_steps: Maximum actions to attempt.
+            dry_run: If True, print actions without executing.
+
+        Returns:
+            Summary string with result.
+        """
+        try:
+            from archangel.plugins.gui_control import GUIAgent
+        except ImportError:
+            return (
+                "GUI control plugin not available. "
+                "Ensure archangel/plugins/gui_control/ exists."
+            )
+
+        agent = GUIAgent()
+        return agent.run(task=task, max_steps=max_steps, dry_run=dry_run, bootstrap=True)

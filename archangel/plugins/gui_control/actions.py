@@ -51,10 +51,14 @@ def execute_action(action: dict[str, Any]) -> bool:
     action_type = action.get("action", "")
     try:
         if action_type == "click":
-            pyautogui.click(action["x"], action["y"])
+            x = max(10, min(action["x"], 1910))
+            y = max(10, min(action["y"], 1070))
+            pyautogui.click(x, y)
 
         elif action_type == "double_click":
-            pyautogui.doubleClick(action["x"], action["y"])
+            x = max(10, min(action["x"], 1910))
+            y = max(10, min(action["y"], 1070))
+            pyautogui.doubleClick(x, y)
 
         elif action_type == "type":
             pyautogui.typewrite(action["text"], interval=0.05)
@@ -71,7 +75,14 @@ def execute_action(action: dict[str, Any]) -> bool:
             pyautogui.hotkey(*action["keys"])
 
         elif action_type == "drag":
-            pyautogui.drag(action["dx"], action["dy"])
+            dx = max(-500, min(action["dx"], 500))
+            dy = max(-500, min(action["dy"], 500))
+            pyautogui.drag(dx, dy)
+
+        elif action_type == "move":
+            x = max(10, min(action["x"], 1910))
+            y = max(10, min(action["y"], 1070))
+            pyautogui.moveTo(x, y)
 
         elif action_type == "done":
             # No-op; orchestrator handles it

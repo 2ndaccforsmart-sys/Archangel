@@ -26,6 +26,9 @@ class TelegramBridge:
         logger.info("Telegram bridge started")
 
     def _run(self):
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         self._app.run_polling(drop_pending_updates=True, close_loop=False)
 
     def stop(self):

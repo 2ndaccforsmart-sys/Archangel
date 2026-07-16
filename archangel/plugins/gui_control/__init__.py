@@ -20,6 +20,7 @@ class GUIAgent:
         task: str,
         max_steps: int = 50,
         dry_run: bool = False,
+        bootstrap: bool = True,
     ) -> str:
         """Execute a GUI automation task.
 
@@ -27,8 +28,9 @@ class GUIAgent:
             task: Natural-language task description.
             max_steps: Maximum actions to attempt.
             dry_run: If True, print actions without executing.
+            bootstrap: If True, auto-open URLs/apps found in the task.
 
         Returns:
             Summary string with result.
         """
-        return run_task(task=task, max_steps=max_steps, dry_run=dry_run)
+        return run_task(task=task, max_steps=max_steps, dry_run=dry_run, bootstrap=bootstrap)
