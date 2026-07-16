@@ -151,6 +151,11 @@ def cmd_summon(console: Console, debug: bool = False,
         from archangel.notifications import NotificationAgent
         NotificationAgent()
 
+        import sys as _sys
+        _obscura_path = Path(__file__).resolve().parents[2] / "tools" / "obscura"
+        if _obscura_path.exists() and str(_obscura_path) not in _sys.path:
+            os.environ["PATH"] = str(_obscura_path) + os.pathsep + os.environ.get("PATH", "")
+
         console.print("[yellow]Starting Telegram bridge ...[/]")
         from archangel.plugins.telegram_bridge import TelegramBridge
         global _bridge
