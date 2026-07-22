@@ -12,7 +12,6 @@ from rich.console import Console
 from .screen import capture_screen, image_to_base64
 from .vision import analyze_frame
 from .actions import confirm_destructive, execute_action
-from .cursor_overlay import CursorOverlay
 
 _console = Console()
 
@@ -178,10 +177,6 @@ def run_task(
     if bootstrap:
         _bootstrap_task_environment(task)
 
-    # Initialize cursor overlay
-    overlay = CursorOverlay()
-    overlay.show()
-
     for step in range(1, max_steps + 1):
         # 1. Capture screen
         try:
@@ -189,8 +184,6 @@ def run_task(
         except Exception as exc:
             msg = f"Screenshot failed at step {step}: {exc}"
             _console.print(f"[red]{msg}[/]")
-            overlay.hide()
-            overlay.destroy()
             return msg
 
         # 2. Analyze with vision model
@@ -199,8 +192,6 @@ def run_task(
         except Exception as exc:
             msg = f"Image encoding failed: {exc}"
             _console.print(f"[red]{msg}[/]")
-            overlay.hide()
-            overlay.destroy()
             return msg
 
         _console.print(f"\n[dim]Analyzing screenshot ({step}/{max_steps})...[/]")
@@ -211,8 +202,6 @@ def run_task(
         # 3. Check if done
         if action.get("action") == "done":
             summary = action.get("summary", "Task complete.")
-            overlay.hide()
-            overlay.destroy()
             _console.print(f"\n[bold green]✓ Done:[/] {summary}")
             return summary
 
@@ -220,18 +209,6 @@ def run_task(
         if dry_run:
             _console.print("  [dim]→ (skipped — dry run)[/]")
         else:
-            # Show cursor at target position before executing
-            if action.get("x") is not None and action.get("y") is not None:
-                overlay.update_position(action["x"], action["y"])
-                time.sleep(0.5)  # Brief pause so user sees cursor
-            elif action.get("action") == "type":
-                # Show cursor at center for typing actions
-                overlay.update_position(960, 540)
-                time.sleep(0.3)
-            elif action.get("action") == "scroll":
-                overlay.update_position(960, 540)
-                time.sleep(0.3)
-
             # Prompt confirmation only when action is destructive
             confirmed = confirm_destructive(action)
             if not confirmed:
@@ -242,11 +219,9 @@ def run_task(
         # 5. Log to history
         history.append(action)
 
-        # 6. Wait between actions so UI can update
-        time.sleep(3.0)
+        # 6. Wait briefly between actions so UI can respond
+        time.sleep(1.0)
 
     msg = f"Max steps ({max_steps}) reached. Task incomplete."
-    overlay.hide()
-    overlay.destroy()
     _console.print(f"[yellow]{msg}[/]")
     return msg
