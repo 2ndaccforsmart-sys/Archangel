@@ -998,19 +998,22 @@ def run_groupchat_repl(console: Console) -> None:
             console.print()
             continue
 
-        turns = engine.process_user_goal(raw)
+        with console.status("[bold cyan]the groupchat agents are typing...[/bold cyan]", spinner="dots"):
+            turns = engine.process_user_goal(raw)
+
         console.print()
+        import time
         for turn in turns:
             agent = turn.get("agent", "commander")
             text = turn.get("text", "")
-            _animate_agent_typing(console, agent)
-            _render_groupchat_header(console, busy_agent=agent)
+            with console.status(f"[bold cyan]the {agent} agent is typing...[/bold cyan]", spinner="dots"):
+                time.sleep(1.0)
             console.print(f"[bold cyan]archangel.agents.{agent}>[/]")
             for line in text.splitlines():
                 if line.strip():
                     console.print(f"  {line}")
             console.print()
-        _render_groupchat_header(console, busy_agent=None)
+
 
 
 def run_agent_chat_repl(console: Console, agent_name: str) -> None:
