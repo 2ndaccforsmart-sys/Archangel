@@ -50,11 +50,10 @@ class GroupChatEngine:
         """
         from archangel.agents.chat import LLMClient
         from archangel.agents.scraper import SmartScraper
-        from archangel.storage import StorageAgent
-        from archangel.models import Lead
+        from archangel.storage import StorageBackend
+        from archangel.models import RawPost, LeadAnalysis, LeadScore
         from archangel.cli import commands as _cli_commands
         import time
-        import uuid
 
         try:
             llm = LLMClient()
@@ -83,25 +82,38 @@ class GroupChatEngine:
                 reddit_posts = scraper.search_reddit_json(clean_q, max_results=5)
                 if reddit_posts:
                     real_data_context = "\n\nREAL LIVE DATA SCRAPED FROM REDDIT:\n"
-                    storage = StorageAgent()
+                    storage = StorageBackend.get_instance()
                     for idx, p in enumerate(reddit_posts, 1):
                         real_data_context += f"{idx}. Title: {p.get('title')} | Subreddit: r/{p.get('subreddit')} | Author: {p.get('author')} | URL: {p.get('url')}\n"
                         # Save real lead to database
                         try:
-                            lead = Lead(
-                                id=str(uuid.uuid4())[:8],
-                                raw_post_id=f"reddit_{idx}_{int(time.time())}",
-                                confidence_score=0.85,
-                                score=85,
-                                title=p.get('title', '')[:100],
-                                summary=p.get('content', '')[:200],
+                            raw_post = RawPost(
                                 source="reddit",
+                                channel=p.get('subreddit', 'reddit'),
+                                author=p.get('author', 'unknown'),
+                                content=f"{p.get('title', '')}\n{p.get('content', '')}",
+                                timestamp=p.get('timestamp', time.time()),
                                 url=p.get('url', ''),
-                                author=p.get('author', ''),
-                                budget_estimate="Medium",
-                                urgency="High",
                             )
-                            storage.save_lead(lead)
+                            raw_id = storage.store_raw_post(raw_post)
+                            if raw_id:
+                                analysis = LeadAnalysis(
+                                    raw_post_id=raw_id,
+                                    is_lead=True,
+                                    confidence=0.85,
+                                    estimated_budget="Medium",
+                                    urgency="High",
+                                    category="automation",
+                                    reasoning="Extracted from groupchat search",
+                                )
+                                analysis_id = storage.store_analysis(analysis)
+                                if analysis_id:
+                                    score = LeadScore(
+                                        analysis_id=analysis_id,
+                                        score=85.0,
+                                        confidence_score=0.85,
+                                    )
+                                    storage.store_score(score)
                         except Exception as e:
                             logger.debug("Failed saving lead: %s", e)
                 else:
