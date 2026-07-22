@@ -473,6 +473,11 @@ def cmd_logs_slash(args: list[str], console: Any, history: list) -> bool:
     return False
 
 
+def cmd_exit(args: list[str], console: Any, history: list) -> bool:
+    """Exit chat back to archangel.main>."""
+    return True
+
+
 COMMANDS = {
     "env":     {"handler": cmd_env,          "desc": "Open .env in editor"},
     "config":  {"handler": cmd_config,       "desc": "Open/show/validate config"},
