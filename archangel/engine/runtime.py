@@ -42,7 +42,7 @@ def stop() -> None:
 
 
 def run_once() -> dict[str, Any]:
-    """Execute a one-time scan cycle.
+    """Execute a one-time scan cycle using parallel analysis and event bus publishing.
 
     Returns
     -------
@@ -51,34 +51,54 @@ def run_once() -> dict[str, Any]:
     """
     start_time = time.time()
 
-    from archangel.collectors import CollectorAgent
     from archangel.analysis import IntelligenceAgent
+    from archangel.collectors import CollectorAgent
+    from archangel.events import EventBus
+    from archangel.notifications import NotificationAgent
     from archangel.scoring import ScoringAgent
     from archangel.storage import StorageBackend
-    from archangel.notifications import NotificationAgent
-    from archangel.events import EventBus
 
     collector = CollectorAgent()
     intelligence = IntelligenceAgent()
     scorer = ScoringAgent()
-    storage = StorageBackend()
+    storage = StorageBackend.get_instance()
     notifier = NotificationAgent()
     event_bus = EventBus.get_instance()
 
     raw_posts = collector.collect_all()
+    if not raw_posts:
+        return {
+            "sources_checked": 0,
+            "posts_collected": 0,
+            "leads_identified": 0,
+            "leads_stored": 0,
+            "duration_ms": int((time.time() - start_time) * 1000),
+        }
+
+    # Filter out posts that already exist in storage
+    unprocessed_posts = [post for post in raw_posts if not storage.lead_exists(post.url)]
+    if not unprocessed_posts:
+        logger.info("Scan complete: All %d collected posts were already processed.", len(raw_posts))
+        return {
+            "sources_checked": len(raw_posts),
+            "posts_collected": len(raw_posts),
+            "leads_identified": 0,
+            "leads_stored": 0,
+            "duration_ms": int((time.time() - start_time) * 1000),
+        }
+
+    # Run parallel batch analysis across unprocessed posts
+    analyzed_batch = intelligence.analyze_batch(unprocessed_posts, max_workers=5)
     stored = 0
     leads_found = 0
 
-    for post in raw_posts:
+    for post, analysis in analyzed_batch:
         try:
-            if storage.lead_exists(post.url):
-                continue
             post_id = storage.store_raw_post(post)
             if not post_id:
-                logger.warning("Failed to store post: %s", post.url)
+                logger.warning("Failed to store raw post: %s", post.url)
                 continue
 
-            analysis = intelligence.analyze(post)
             analysis.raw_post_id = post_id
             analysis_id = storage.store_analysis(analysis)
 
@@ -105,13 +125,12 @@ def run_once() -> dict[str, Any]:
 
     duration_ms = int((time.time() - start_time) * 1000)
     logger.info(
-        "Scan complete: %d posts, %d stored, %d leads in %dms",
+        "Scan complete: %d posts collected, %d stored, %d leads in %dms",
         len(raw_posts), stored, leads_found, duration_ms,
     )
 
-    sources_count = len(raw_posts)
     return {
-        "sources_checked": sources_count if sources_count > 0 else 0,
+        "sources_checked": len(raw_posts),
         "posts_collected": len(raw_posts),
         "leads_identified": leads_found,
         "leads_stored": stored,

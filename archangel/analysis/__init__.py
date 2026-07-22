@@ -1,10 +1,14 @@
 """AI reasoning logic — converts raw posts into structured understanding."""
 
+from __future__ import annotations
+
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Optional, Tuple
 
-from archangel.models import RawPost, LeadAnalysis
+from archangel.models import LeadAnalysis, RawPost
 
 logger = logging.getLogger(__name__)
 
@@ -13,9 +17,23 @@ class IntelligenceAgent:
     """The reasoning engine. Analyses raw posts for lead potential."""
 
     def __init__(self) -> None:
-        from archangel.agents.chat import LLMClient
-        self.llm = LLMClient()
+        self._llm = None
         logger.debug("IntelligenceAgent created")
+
+    @property
+    def llm(self):
+        if self._llm is None:
+            try:
+                from archangel.agents.chat import LLMClient
+                self._llm = LLMClient()
+            except Exception as exc:
+                logger.warning("Could not initialize LLMClient: %s", exc)
+                self._llm = None
+        return self._llm
+
+    @llm.setter
+    def llm(self, value):
+        self._llm = value
 
     def analyze(self, post: RawPost) -> LeadAnalysis:
         prompt = f"""Analyze this post and determine if it's a potential lead for software development services.
@@ -47,6 +65,8 @@ Return ONLY valid JSON:
     "reasoning": "..."
 }}"""
         try:
+            if not self.llm:
+                return LeadAnalysis(is_lead=False, confidence=0.0, reasoning="LLM client not available")
             response = self.llm.chat([{"role": "user", "content": prompt}])
             result = self._parse_response(response)
             return LeadAnalysis(
@@ -61,12 +81,31 @@ Return ONLY valid JSON:
                 reasoning=result.get("reasoning", ""),
             )
         except Exception as exc:
-            logger.error("IntelligenceAgent.analyze failed: %s", exc)
+            logger.error("IntelligenceAgent.analyze failed for %s: %s", post.url, exc)
             return LeadAnalysis(
                 is_lead=False,
                 confidence=0.0,
                 reasoning=f"Analysis error: {exc}",
             )
+
+    def analyze_batch(self, posts: List[RawPost], max_workers: int = 5) -> List[Tuple[RawPost, LeadAnalysis]]:
+        """Analyze a list of posts concurrently using a worker pool."""
+        if not posts:
+            return []
+
+        results: List[Tuple[RawPost, LeadAnalysis]] = []
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(posts)), thread_name_prefix="intelligence-worker") as executor:
+            future_to_post = {executor.submit(self.analyze, post): post for post in posts}
+            for future in as_completed(future_to_post):
+                post = future_to_post[future]
+                try:
+                    analysis = future.result()
+                    results.append((post, analysis))
+                except Exception as exc:
+                    logger.error("Batch analysis task failed for %s: %s", post.url, exc)
+                    results.append((post, LeadAnalysis(is_lead=False, confidence=0.0, reasoning=str(exc))))
+
+        return results
 
     def _parse_response(self, response: str) -> dict:
         json_match = re.search(r'\{.*\}', response, re.DOTALL)

@@ -19,7 +19,13 @@ class CollectorAgent:
     def collect_all(self) -> list[RawPost]:
         from archangel.config.manager import load_config
         cfg = load_config()
-        sources = cfg.get("sources", {}).get("sources", []) or cfg.get("sources", [])
+        raw_sources = cfg.get("sources", [])
+        if isinstance(raw_sources, dict):
+            sources = raw_sources.get("sources", [])
+        elif isinstance(raw_sources, list):
+            sources = raw_sources
+        else:
+            sources = []
 
         if not sources:
             logger.warning("No sources configured in sources.yaml")
