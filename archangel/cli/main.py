@@ -717,9 +717,215 @@ def cmd_start_telegram(console: Console) -> bool:
         return False
 
 
+AGENT_SYSTEM_PROMPTS = {
+    "collector": (
+        "You are Archangel Collector Agent (archangel.collector), the specialized data acquisition subsystem of The Archangel platform.\n"
+        "Your domain expertise includes: web scraping, RSS feed parsing, Reddit JSON API, X/Twitter search, Discord monitoring, HTML extraction, and rate limit compliance.\n"
+        "Be sharp, helpful, concise, and focused on data gathering, feed configurations, and scraping strategies. Speak as the Collector agent."
+    ),
+    "intelligence": (
+        "You are Archangel Intelligence Agent (archangel.intelligence), the specialized AI reasoning and intent classification subsystem of The Archangel platform.\n"
+        "Your domain expertise includes: demand-side lead detection, NLP complaint language recognition, buyer intent scoring, sentiment evaluation, and LLM prompt engineering.\n"
+        "Be analytical, sharp, precise, and focused on lead filtering rules, intent detection, and AI classification logic. Speak as the Intelligence agent."
+    ),
+    "scoring": (
+        "You are Archangel Scoring Agent (archangel.scoring), the specialized lead scoring and prioritization subsystem of The Archangel platform.\n"
+        "Your domain expertise includes: lead evaluation, budget confidence metrics, urgency scoring, priority queue ordering, and value assessment formulas.\n"
+        "Be quantitative, sharp, structured, and focused on ranking leads, evaluating lead scores, and tuning priority metrics. Speak as the Scoring agent."
+    ),
+    "guardian": (
+        "You are Archangel Guardian Agent (archangel.guardian), the specialized component health monitoring and supervisor subsystem of The Archangel platform.\n"
+        "Your domain expertise includes: component fault monitoring, error rate statistics, event bus telemetry, subscriber exception isolation, and platform health reporting.\n"
+        "Be protective, vigilant, diagnostic, and focused on system stability, agent status, and fault recovery. Speak as the Guardian agent."
+    ),
+    "commander": (
+        "You are Archangel Commander Agent (archangel.commander), the core orchestration and lifecycle management subsystem of The Archangel platform.\n"
+        "Your domain expertise includes: agent registration, state transitions, task coordination, execution flow, and platform command dispatching.\n"
+        "Be strategic, decisive, organized, and focused on agent coordination and workflow orchestration. Speak as the Commander agent."
+    ),
+    "storage": (
+        "You are Archangel Storage Agent (archangel.storage), the persistent data storage subsystem of The Archangel platform.\n"
+        "Your domain expertise includes: SQLite Write-Ahead Logging (WAL) concurrency, database indexing, lead deduplication, query optimization, and data export formats (JSON, CSV, MD).\n"
+        "Be precise, structured, data-focused, and knowledgeable about lead schema and database performance. Speak as the Storage agent."
+    ),
+    "notification": (
+        "You are Archangel Notification Agent (archangel.notification), the outbound messaging and alert delivery subsystem of The Archangel platform.\n"
+        "Your domain expertise includes: Telegram bridge messaging, Discord webhook alerts, notification templating, rate limiting, and delivery channels.\n"
+        "Be clear, prompt, delivery-focused, and knowledgeable about alert routing and notification channels. Speak as the Notification agent."
+    ),
+}
+
+
+def run_agent_chat_repl(console: Console, agent_name: str) -> None:
+    """Enter an interactive multi-turn AI chat mode with a specific agent persona."""
+    agent = agent_name.lower().replace("archangel.", "")
+    if agent not in AGENT_SYSTEM_PROMPTS:
+        console.print(f"[yellow]Unknown agent persona: {agent_name}[/]")
+        return
+
+    from dotenv import load_dotenv
+    load_dotenv(_get_project_root() / ".env", override=False)
+
+    from archangel.agents.chat import (
+        LLMClient, CommandExecutor, WebSearch,
+        EXECUTE_RE, SEARCH_RE, AUTOMATE_RE,
+        extract_execute_commands, extract_search_queries
+    )
+
+    try:
+        llm = LLMClient()
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/]")
+        return
+
+    executor = CommandExecutor()
+    history: list[dict[str, str]] = [{
+        "role": "system",
+        "content": AGENT_SYSTEM_PROMPTS[agent] + (
+            "\n\nRUNTIME\nOS: Windows 11 | Shell: PowerShell\n"
+            "TOOLS\n"
+            "1. <execute>...</execute> — run a PowerShell command\n"
+            "2. <search>...</search> — search the web\n"
+        )
+    }]
+
+    console.print()
+    console.print(Panel.fit(
+        f"[bold cyan]🤖 archangel.{agent} — Interactive Agent Chat[/]\n"
+        f"[dim]Freely talk, ask questions, or issue instructions to archangel.{agent}.[/]\n"
+        f"[italic #c0c0c0]Type exit, quit, or back to return to archangel.main>[/]",
+        border_style="cyan",
+    ))
+    console.print()
+
+    prompt_str = f"archangel.{agent}> "
+
+    session = None
+    try:
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.history import FileHistory
+        hist_path = Path.home() / f".archangel_{agent}_history"
+        hist_path.parent.mkdir(parents=True, exist_ok=True)
+        session = PromptSession(prompt_str, history=FileHistory(str(hist_path)))
+    except Exception:
+        pass
+
+    while True:
+        try:
+            if session:
+                raw = session.prompt()
+            else:
+                raw = input(prompt_str)
+        except (EOFError, KeyboardInterrupt):
+            console.print(f"\n[yellow]Exiting archangel.{agent} chat mode -> returning to archangel.main>[/]")
+            break
+
+        raw = raw.strip()
+        if not raw:
+            continue
+
+        if raw.lower() in ("exit", "quit", "back", "/exit", "/back"):
+            console.print(f"[yellow]Exiting archangel.{agent} chat mode -> returning to archangel.main>[/]")
+            break
+
+        history.append({"role": "user", "content": raw})
+
+        _exec_iterations = 0
+        while True:
+            try:
+                llm.switch_provider(_cli_commands._active_model_provider)
+                response_text = llm.chat(history)
+            except Exception as exc:
+                console.print(f"[red]LLM error: {exc}[/]")
+                break
+
+            _exec_iterations += 1
+            if _exec_iterations > 5:
+                console.print(f"[yellow]archangel.{agent}> Stopped after 5 iterations.[/]")
+                break
+
+            history.append({"role": "assistant", "content": response_text})
+
+            display = EXECUTE_RE.sub("", response_text)
+            display = SEARCH_RE.sub("", display)
+            display = AUTOMATE_RE.sub("", display)
+            display = re.sub(r"<pyautogui_call>.*?</pyautogui_call>", "", display, flags=re.DOTALL)
+
+            console.print()
+            for line in display.splitlines():
+                if line.strip():
+                    console.print(f"[bold cyan]archangel.{agent}>[/] {line}")
+            console.print()
+
+            # Handle <search>...</search>
+            queries = extract_search_queries(response_text)
+            if queries:
+                for q in queries:
+                    console.print(f"[bold cyan]archangel.{agent}>[/] [dim]searching: {q}[/]")
+                    search_output = WebSearch().search(q)
+                    history.append({
+                        "role": "user",
+                        "content": f"<search_results>\n{search_output}\n</search_results>",
+                    })
+                continue
+
+            # Handle <execute>...</execute>
+            commands = extract_execute_commands(response_text)
+            if not commands:
+                break
+
+            for cmd in commands:
+                console.print(f"[bold cyan]archangel.{agent}>[/] [dim]$ {cmd}[/]")
+                output = executor.execute(cmd)
+                history.append({
+                    "role": "user",
+                    "content": f"<output>\n{output}\n</output>",
+                })
+
+
+def _run_single_agent_query(console: Console, agent_name: str, query: str) -> bool:
+    """Send a single query to an agent persona and display the response."""
+    agent = agent_name.lower().replace("archangel.", "")
+    if agent not in AGENT_SYSTEM_PROMPTS:
+        console.print(f"[yellow]Unknown agent target: {agent_name}[/]")
+        return False
+
+    from dotenv import load_dotenv
+    load_dotenv(_get_project_root() / ".env", override=False)
+    from archangel.agents.chat import LLMClient
+
+    try:
+        llm = LLMClient()
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/]")
+        return False
+
+    history = [
+        {"role": "system", "content": AGENT_SYSTEM_PROMPTS[agent]},
+        {"role": "user", "content": query},
+    ]
+
+    try:
+        console.print(f"[dim]Querying archangel.{agent}...[/dim]")
+        resp = llm.chat(history)
+        console.print(f"\n[bold cyan]archangel.{agent}>[/] {resp}\n")
+        return True
+    except Exception as exc:
+        console.print(f"[red]Error querying agent: {exc}[/]")
+        return False
+
+
 def cmd_agent_dispatch(console: Console, agent_name: str, action: str = "status", payload: str = "") -> bool:
     """Communicate directly with a specific Archangel agent subsystem."""
     agent = agent_name.lower().replace("archangel.", "")
+
+    if action.lower() in ("chat", "interactive", "repl") or payload.lower() in ("chat", "interactive"):
+        run_agent_chat_repl(console, agent)
+        return True
+
+    if payload and action not in ("scan", "collect", "status", "health"):
+        return _run_single_agent_query(console, agent, f"{action} {payload}".strip())
+
     console.print(f"[bold cyan]🤖 Agent Target:[/] archangel.{agent}")
 
     if agent == "collector":
@@ -728,8 +934,11 @@ def cmd_agent_dispatch(console: Console, agent_name: str, action: str = "status"
         console.print("[green]✓ Connected to archangel.collector[/]")
         if action in ("scan", "collect"):
             return cmd_scan(console)
+        elif payload:
+            return _run_single_agent_query(console, agent, payload)
         else:
             console.print("  [dim]Status:[/] Ready to gather raw posts from configured sources.")
+            console.print("  [dim]Tip:[/] Type [bold green]collector chat[/] (or [bold green]archangel.collector chat[/]) to freely talk to this agent.")
             return True
 
     elif agent == "intelligence":
@@ -746,6 +955,7 @@ def cmd_agent_dispatch(console: Console, agent_name: str, action: str = "status"
             console.print(f"  [bold]Reasoning:[/] {analysis.reasoning}")
         else:
             console.print("  [dim]Status:[/] Reasoning AI engine active.")
+            console.print("  [dim]Tip:[/] Type [bold green]intelligence chat[/] (or [bold green]archangel.intelligence chat[/]) to freely talk to this agent.")
         return True
 
     elif agent == "scoring":
@@ -753,6 +963,7 @@ def cmd_agent_dispatch(console: Console, agent_name: str, action: str = "status"
         ScoringAgent()
         console.print("[green]✓ Connected to archangel.scoring[/]")
         console.print("  [dim]Status:[/] Lead ranking engine active.")
+        console.print("  [dim]Tip:[/] Type [bold green]scoring chat[/] (or [bold green]archangel.scoring chat[/]) to freely talk to this agent.")
         return True
 
     elif agent == "guardian":
@@ -765,6 +976,7 @@ def cmd_agent_dispatch(console: Console, agent_name: str, action: str = "status"
         for k, v in health["components"].items():
             table.add_row(k, f"[green]{v}[/]")
         console.print(table)
+        console.print("  [dim]Tip:[/] Type [bold green]guardian chat[/] (or [bold green]archangel.guardian chat[/]) to freely talk to this agent.")
         return True
 
     elif agent == "commander":
@@ -772,6 +984,7 @@ def cmd_agent_dispatch(console: Console, agent_name: str, action: str = "status"
         CommanderAgent(EventBus.get_instance())
         console.print("[green]✓ Connected to archangel.commander[/]")
         console.print("  [dim]Status:[/] Commander orchestrator ready.")
+        console.print("  [dim]Tip:[/] Type [bold green]commander chat[/] (or [bold green]archangel.commander chat[/]) to freely talk to this agent.")
         return True
 
     elif agent == "storage":
@@ -780,11 +993,13 @@ def cmd_agent_dispatch(console: Console, agent_name: str, action: str = "status"
         count = st.get_lead_count()
         console.print("[green]✓ Connected to archangel.storage[/]")
         console.print(f"  [bold]Active Database Leads:[/] {count}")
+        console.print("  [dim]Tip:[/] Type [bold green]storage chat[/] (or [bold green]archangel.storage chat[/]) to freely talk to this agent.")
         return True
 
     elif agent == "notification":
         console.print("[green]✓ Connected to archangel.notification[/]")
         console.print("  [dim]Status:[/] Messaging delivery channels active.")
+        console.print("  [dim]Tip:[/] Type [bold green]notification chat[/] (or [bold green]archangel.notification chat[/]) to freely talk to this agent.")
         return True
 
     else:
