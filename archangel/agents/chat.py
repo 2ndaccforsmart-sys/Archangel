@@ -295,8 +295,13 @@ class LLMClient:
         self._client = None
         self._detect_and_init()
 
-    def chat(self, messages: list[dict[str, str]]) -> str:
+    def chat(self, messages: list[dict[str, str]], tried: set[str] | None = None) -> str:
         """Send a message list to the provider and return the response text."""
+        if tried is None:
+            tried = set()
+        if self.provider:
+            tried.add(self.provider)
+
         try:
             if self.provider in ("GROQ", "OPENROUTER", "OPENCODEZEN"):
                 response = self._client.chat.completions.create(
@@ -348,13 +353,13 @@ class LLMClient:
             raise RuntimeError(f"Unsupported provider: {self.provider}")
 
         except Exception as exc:
-            if "429" in str(exc) or "quota" in str(exc).lower():
-                # Auto-fallback to next available provider on quota/rate-limit
-                fallback_order = ["GROQ", "OPENCODEZEN", "OPENROUTER", "GEMINI", "OPENAI", "ANTHROPIC"]
-                for next_provider in fallback_order:
-                    if next_provider != self.provider and os.environ.get(next_provider):
-                        self.switch_provider(next_provider)
-                        return self.chat(messages)
+            # Auto-fallback to next available provider on rate-limit, 500/5xx server errors, or connection failure
+            fallback_order = ["GROQ", "OPENCODEZEN", "OPENROUTER", "GEMINI", "OPENAI", "ANTHROPIC"]
+            for next_provider in fallback_order:
+                if next_provider not in tried and os.environ.get(next_provider):
+                    logger.warning("LLM provider %s failed (%s). Auto-falling back to %s...", self.provider, exc, next_provider)
+                    self.switch_provider(next_provider)
+                    return self.chat(messages, tried=tried)
             raise
 
 

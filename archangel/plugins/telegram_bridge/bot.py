@@ -72,7 +72,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Commands:\n"
         "  status - System status\n"
         "  search <query> - Search the web\n"
-        "  leads <query> [site:<platform>] - Find leads (describe naturally)\n"
+        "  leads <query> [site:reddit|x] - Find leads from X, Reddit, or both\n"
         "  save - Save last leads to file\n"
         "  mode [basic|smart|continuous] - Toggle scraping mode\n"
         "  scrape <url> - Scrape a URL\n"
@@ -180,6 +180,7 @@ def _parse_leads_query(raw: str) -> dict:
         "- 'anyone else struggle with X'\n"
         "- 'need better tool for X'\n"
         "- 'manual X is killing me'\n\n"
+        "IMPORTANT: Focus on RECENT posts (last few days only). Old viral tweets are NOT leads. People complaining THIS WEEK are leads.\n\n"
         "AVOID these (supply-side magnets):\n"
         "- 'anyone know how to' (attracts tutorials)\n"
         "- 'looking for developer' (attracts freelancers)\n"
@@ -203,25 +204,24 @@ def _parse_leads_query(raw: str) -> dict:
 
 
 SUPPLY_SIGNALS = [
-    "we offer", "our services", "hire us", "contact us", "contact me",
-    "dm me", "dm for", "message me", "shoot me a",
+    "we offer", "our services", "hire us",
     "comment below", "check my", "link in bio", "book a call",
     "schedule a", "let's connect", "let's talk", "drop a dm",
     "i build", "i create", "i develop", "we build", "we provide", "we deliver",
     "my portfolio", "my agency", "our agency", "what we do",
     "what i offer", "services include", "we specialize",
     "available for hire", "open to work", "looking for clients",
-    "freelance", "consulting", "let me know if you need",
+    "freelance", "consulting",
     "follow for more", "subscribe", "join my", "free consultation",
     "limited spots", "dm for info", "price list", "starting at",
-    "pricing", "get a quote", "get started", "sign up",
+    "pricing", "get a quote",
 ]
 
 
 def _is_supply_side(content: str) -> bool:
     lower = content.lower()
     matches = sum(1 for signal in SUPPLY_SIGNALS if signal in lower)
-    return matches >= 2
+    return matches >= 3
 
 
 def _filter_supply(combined_content: str) -> str:
@@ -237,11 +237,12 @@ def _filter_supply(combined_content: str) -> str:
     return "\n---\n".join(clean)
 
 
-def _build_combined_content(scraper, queries, alternatives):
-    """Search X/Twitter only. Runs 5 queries (3 primary + 2 alternative), dedups, returns up to 15 tweets."""
+def _build_combined_content(scraper, queries, alternatives, raw_query=None):
+    """Search X/Twitter and Reddit. Returns combined content and total item count."""
     all_urls_seen = set()
     combined = ""
     tweets = []
+    reddit_posts = []
 
     for q in queries[:3]:
         results = scraper.fetch_x_search_via_ddg(q, max_results=5)
@@ -269,7 +270,28 @@ def _build_combined_content(scraper, queries, alternatives):
                 f"{t['content'][:1000]}\n---\n"
             )
 
-    return combined, len(tweets)
+    if raw_query:
+        try:
+            reddit_results = scraper.search_reddit_json(raw_query, max_results=5)
+            for r in reddit_results:
+                if r['url'] not in all_urls_seen:
+                    all_urls_seen.add(r['url'])
+                    reddit_posts.append(r)
+        except Exception:
+            logger.warning("Reddit search failed for query: %s", raw_query)
+
+    if reddit_posts:
+        combined += "\n=== REDDIT POSTS ===\n"
+        for r in reddit_posts[:5]:
+            combined += (
+                f"Author: u/{r['author']}\n"
+                f"Subreddit: r/{r['subreddit']}\n"
+                f"URL: {r['url']}\n"
+                f"Score: {r['score']} | Comments: {r['comments']}\n"
+                f"{r['content'][:1000]}\n---\n"
+            )
+
+    return combined, len(tweets) + len(reddit_posts)
 
 
 @auth_required
@@ -290,6 +312,14 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     raw_query = parts[1].strip().strip('"').strip("'")
+
+    site_filter = None
+    import re as _re
+    site_match = _re.search(r'\bsite:(reddit|x)\b', raw_query, _re.IGNORECASE)
+    if site_match:
+        site_filter = site_match.group(1).lower()
+        raw_query = _re.sub(r'\bsite:(reddit|x)\b', '', raw_query, flags=_re.IGNORECASE).strip()
+
     status_msg = await update.message.reply_text("🔍 Parsing your request...")
 
     try:
@@ -307,19 +337,44 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         scraper = SmartScraper()
 
-        # Step 1-2: Search X/Twitter only
-        await status_msg.edit_text(f"{parse_log}\n\n🔍 Searching X/Twitter...")
-        combined_content, tweet_count = _build_combined_content(
-            scraper, queries, alternatives
-        )
+        # Step 1-2: Search
+        if site_filter == "reddit":
+            search_label = "Reddit"
+            await status_msg.edit_text(f"{parse_log}\n\n🔍 Searching Reddit...")
+            combined_content, item_count = _build_combined_content(
+                scraper, queries, alternatives, raw_query=raw_query
+            )
+            combined_content = combined_content.replace("=== REDDIT POSTS ===", "=== REDDIT POSTS (site:reddit) ===", 1)
+            combined_content = combined_content.replace("=== X/TWITTER POSTS ===", "", 1)
+        elif site_filter == "x":
+            search_label = "X/Twitter"
+            await status_msg.edit_text(f"{parse_log}\n\n🔍 Searching X/Twitter...")
+            combined_content, item_count = _build_combined_content(
+                scraper, queries, alternatives
+            )
+        else:
+            search_label = "X/Twitter + Reddit"
+            await status_msg.edit_text(f"{parse_log}\n\n🔍 Searching X/Twitter + Reddit...")
+            combined_content, item_count = _build_combined_content(
+                scraper, queries, alternatives, raw_query=raw_query
+            )
 
         # Step 3: Supply-side pre-filter
         filtered_content = _filter_supply(combined_content)
 
         if not filtered_content.strip():
-            filtered_content = combined_content  # Use unfiltered if filter removes everything
+            filtered_content = combined_content + "\n\n---\n[Note: All results were service providers. Showing unfiltered results.]"
 
-        total_found = f"{tweet_count} tweets"
+        max_llm_chars = 8000
+        llm_content = filtered_content
+        truncated = False
+        if len(llm_content) > max_llm_chars:
+            llm_content = llm_content[:max_llm_chars]
+            dropped = len(filtered_content) - max_llm_chars
+            llm_content += f"\n\n[Note: {dropped} characters of search results were truncated. Some leads may have been missed.]"
+            truncated = True
+
+        total_found = f"{item_count} results" + (" (some results truncated)" if truncated else "")
         await status_msg.edit_text(f"{parse_log}\n\n✅ Found {total_found}")
 
         # Step 4: LLM extracts leads — no SKIPPED output
@@ -350,11 +405,11 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Return ONLY leads. If genuinely zero leads exist, say:\n"
                 "'Try: looking for developer to build [specific thing]'\n\n"
                 f"Query: {query}\n\n"
-                f"{content[:8000]}"
+                f"{content}"
             )
             return llm.chat([{"role": "user", "content": prompt}])
 
-        response = _run_llm(filtered_content, raw_query)
+        response = _run_llm(llm_content, raw_query)
 
         # Step 5: Auto-retry with broader query if zero leads
         if "1." not in response and "http" not in response.lower():
@@ -362,7 +417,7 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.edit_text(f"{parse_log}\n\n🔍 Trying broader: '{broader}'...")
             broader_scraper = SmartScraper()
             broader_combined, _ = _build_combined_content(
-                broader_scraper, [broader], []
+                broader_scraper, [broader], [], raw_query=raw_query
             )
             broader_filtered = _filter_supply(broader_combined)
             if broader_filtered.strip():
@@ -375,7 +430,9 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bridge.last_leads = response
         bridge.last_leads_query = raw_query
 
-        lead_count = response.count("1. ")
+        import re
+        lead_matches = re.findall(r'(?:^|\n)\s*\d+[\.\)]\s?', response)
+        lead_count = len(lead_matches)
         if lead_count > 0:
             done_text = f"✅ Found {lead_count} potential leads."
         else:

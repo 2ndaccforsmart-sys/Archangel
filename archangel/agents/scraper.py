@@ -189,8 +189,10 @@ class SmartScraper:
         """Search Google for actual X/Tweet URLs."""
         import requests
         import re
+        from datetime import datetime, timedelta
 
-        search_query = f"site:x.com {query}"
+        after_date = (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
+        search_query = f"site:x.com {query} after:{after_date}"
         url = f"https://www.google.com/search?q={requests.utils.quote(search_query)}&num={max_results}"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -205,6 +207,20 @@ class SmartScraper:
             logger.error("Google search failed: %s", e)
             return []
 
+    def _tweet_is_recent(self, url: str, days: int = 5) -> bool:
+        from datetime import datetime, timedelta
+        import re
+        match = re.search(r'/status/(\d+)', url)
+        if not match:
+            return True
+        try:
+            tweet_id = int(match.group(1))
+            ms = (tweet_id >> 22) + 1288834974656
+            post_time = datetime.fromtimestamp(ms / 1000)
+            return post_time >= datetime.now() - timedelta(days=days)
+        except (ValueError, OverflowError):
+            return True
+
     def fetch_x_search_via_ddg(self, query: str, max_results: int = 5) -> list:
         """Search X via Google + DuckDuckGo, fetch tweets via fxtwitter."""
         from archangel.agents.chat import WebSearch
@@ -215,6 +231,8 @@ class SmartScraper:
         # Strategy 1: Google (finds actual tweets)
         google_urls = self._search_google_tweets(query, max_results=max_results)
         for url in google_urls[:3]:
+            if not self._tweet_is_recent(url):
+                continue
             content = self.fetch_tweet(url)
             if content and not content.startswith("Error:"):
                 tweets.append({"url": url, "content": content[:3000]})
@@ -226,6 +244,8 @@ class SmartScraper:
             for url in urls[:3]:
                 # ONLY keep actual tweet URLs
                 if re.search(r'x\.com/\w+/status/\d+', url) and not any(t['url'] == url for t in tweets):
+                    if not self._tweet_is_recent(url):
+                        continue
                     content = self.fetch_tweet(url)
                     if content and not content.startswith("Error:"):
                         tweets.append({"url": url, "content": content[:3000]})
@@ -298,7 +318,7 @@ class SmartScraper:
 
                     if not title and not selftext:
                         continue
-                    if score < 1 and num_comments < 1:
+                    if created_utc < time.time() - 5 * 86400:
                         continue
 
                     posts.append({

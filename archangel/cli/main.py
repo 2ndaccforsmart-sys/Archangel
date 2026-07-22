@@ -866,6 +866,17 @@ def _create_prompt_session(
         return None
 
 
+def _handle_slash_intercept(raw: str, console: Console, history: list) -> bool:
+    """Intercept slash commands across REPLs. Returns True if REPL should exit."""
+    from archangel.cli.commands import COMMANDS as _CHAT_COMMANDS, handle_slash_command
+    _cmd_name = raw[1:].strip().split()[0].lower() if raw[1:].strip() else ""
+    if _cmd_name in _CHAT_COMMANDS:
+        return handle_slash_command(raw, console, history)
+    else:
+        _execute_repl_command(console, raw[1:].strip())
+        return False
+
+
 def run_agents_hub_repl(console: Console) -> None:
     """Hub where all 7 agents are present. Messages are automatically routed to the matching agent."""
     from dotenv import load_dotenv
@@ -908,6 +919,12 @@ def run_agents_hub_repl(console: Console) -> None:
         if raw.lower() in ("exit", "quit", "back", "/exit", "/back"):
             console.print()
             break
+
+        if raw.startswith("/"):
+            if _handle_slash_intercept(raw, console, []):
+                console.print()
+                break
+            continue
 
         target_agent = _classify_agent_topic(raw)
         history = [
@@ -983,6 +1000,12 @@ def run_groupchat_repl(console: Console) -> None:
         if raw.lower() in ("exit", "quit", "back", "/exit", "/back"):
             console.print()
             break
+
+        if raw.startswith("/"):
+            if _handle_slash_intercept(raw, console, getattr(engine, "history", [])):
+                console.print()
+                break
+            continue
 
         if raw.lower() in ("status", "online", "busy", "list"):
             console.print()
@@ -1079,6 +1102,12 @@ def run_agent_chat_repl(console: Console, agent_name: str) -> None:
         if raw.lower() in ("exit", "quit", "back", "/exit", "/back"):
             console.print()
             break
+
+        if raw.startswith("/"):
+            if _handle_slash_intercept(raw, console, history):
+                console.print()
+                break
+            continue
 
         history.append({"role": "user", "content": raw})
 
@@ -1893,7 +1922,7 @@ def run_chat_repl(console: Console) -> None:
             if not raw:
                 continue
             if raw.startswith("/"):
-                should_exit = handle_slash_command(raw, console, history)
+                should_exit = _handle_slash_intercept(raw, console, history)
                 if should_exit:
                     console.print()
                     return
@@ -2106,7 +2135,7 @@ def run_chat_repl(console: Console) -> None:
             if not raw:
                 continue
             if raw.startswith("/"):
-                should_exit = handle_slash_command(raw, console, history)
+                should_exit = _handle_slash_intercept(raw, console, history)
                 if should_exit:
                     console.print("[yellow]archangel> Returning to archangel.main>[/]")
                     return
