@@ -28,9 +28,9 @@ def init_logger(debug: bool = False, log_dir: str | Path = "logs") -> None:
     # Remove any pre-existing handlers
     root.handlers.clear()
 
-    # --- Console handler (stderr) ---
+    # --- Console handler (stderr: WARNING+ by default, DEBUG if debug=True) ---
     console = logging.StreamHandler(sys.stderr)
-    console.setLevel(level)
+    console.setLevel(logging.DEBUG if debug else logging.WARNING)
     console.setFormatter(logging.Formatter(
         "%(levelname)-8s %(name)s | %(message)s",
     ))

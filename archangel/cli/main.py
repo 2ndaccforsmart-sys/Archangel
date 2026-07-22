@@ -47,7 +47,15 @@ REPL_COMMANDS = [
 
 # ---------------------------------------------------------------------------
 # Console singleton
-# ---------------------------------------------------------------------------
+if sys.platform == "win32":
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 _console = Console()
 _bridge = None
 
@@ -184,13 +192,10 @@ def cmd_summon(console: Console, debug: bool = False,
         if _obscura_path.exists() and str(_obscura_path) not in _sys.path:
             os.environ["PATH"] = str(_obscura_path) + os.pathsep + os.environ.get("PATH", "")
 
-        console.print("[yellow]Starting Telegram bridge ...[/]")
-        from archangel.plugins.telegram_bridge import TelegramBridge
-        global _bridge
-        _bridge = TelegramBridge()
-        _bridge.start()
-
+        console.print("[yellow]Starting platform engine ...[/]")
         engine_start(debug=debug, config_path=config_path)
+
+        console.print()
         _step("Configuration loaded")
         _step("Logger initialized")
         _step("Event bus initialized")
@@ -202,7 +207,6 @@ def cmd_summon(console: Console, debug: bool = False,
         _step("Intelligence agent ready")
         _step("Scoring agent ready")
         _step("Notification agent ready")
-        _step("Telegram bridge active")
         _step("Engine started")
 
         console.print()
@@ -681,6 +685,183 @@ def cmd_registry_info(console: Console, name: str) -> bool:
     return True
 
 
+def cmd_start_telegram(console: Console) -> bool:
+    """Start the Telegram remote control bridge on demand."""
+    from archangel.plugins.telegram_bridge import TelegramBridge, get_running_telegram_bridge_info
+
+    is_running, pid, is_current = get_running_telegram_bridge_info()
+    if is_running:
+        if is_current:
+            console.print("[yellow]Telegram bridge / agent is already started in this window.[/]")
+        else:
+            console.print(f"[yellow]Telegram bridge / agent is already started in another window (PID: {pid}).[/]")
+        return True
+
+    console.print("[yellow]Starting Telegram bridge ...[/]")
+    bridge = TelegramBridge.get_instance()
+    success, msg = bridge.start()
+    if success:
+        _step("Telegram bridge active")
+        console.print(f"[bold green]✓ {msg}[/]")
+        return True
+    else:
+        _print_error_panel(
+            what="Failed to start Telegram bridge.",
+            why=msg,
+            suggestions=[
+                "Ensure TELEGRAM_BOT_TOKEN is set in your .env or configs/config.yaml.",
+                "Verify no other process is using the Telegram bot token.",
+                "Check logs/archangel.log for details.",
+            ],
+        )
+        return False
+
+
+def cmd_agent_dispatch(console: Console, agent_name: str, action: str = "status", payload: str = "") -> bool:
+    """Communicate directly with a specific Archangel agent subsystem."""
+    agent = agent_name.lower().replace("archangel.", "")
+    console.print(f"[bold cyan]🤖 Agent Target:[/] archangel.{agent}")
+
+    if agent == "collector":
+        from archangel.collectors import CollectorAgent
+        CollectorAgent()
+        console.print("[green]✓ Connected to archangel.collector[/]")
+        if action in ("scan", "collect"):
+            return cmd_scan(console)
+        else:
+            console.print("  [dim]Status:[/] Ready to gather raw posts from configured sources.")
+            return True
+
+    elif agent == "intelligence":
+        from archangel.analysis import IntelligenceAgent
+        console.print("[green]✓ Connected to archangel.intelligence[/]")
+        if payload:
+            from archangel.models import RawPost
+            post = RawPost(source="cli", channel="manual", author="user", content=payload, url="https://cli.local")
+            intel = IntelligenceAgent()
+            analysis = intel.analyze(post)
+            console.print(f"  [bold]Is Lead:[/] {analysis.is_lead}")
+            console.print(f"  [bold]Confidence:[/] {analysis.confidence:.2f}")
+            console.print(f"  [bold]Category:[/] {analysis.category}")
+            console.print(f"  [bold]Reasoning:[/] {analysis.reasoning}")
+        else:
+            console.print("  [dim]Status:[/] Reasoning AI engine active.")
+        return True
+
+    elif agent == "scoring":
+        from archangel.scoring import ScoringAgent
+        ScoringAgent()
+        console.print("[green]✓ Connected to archangel.scoring[/]")
+        console.print("  [dim]Status:[/] Lead ranking engine active.")
+        return True
+
+    elif agent == "guardian":
+        from archangel.events import EventBus, GuardianAgent
+        g = GuardianAgent(EventBus.get_instance())
+        health = g.get_system_health()
+        table = Table(title="🛡 Guardian Agent — Component Health", border_style="cyan")
+        table.add_column("Component", style="cyan")
+        table.add_column("Status", style="bold")
+        for k, v in health["components"].items():
+            table.add_row(k, f"[green]{v}[/]")
+        console.print(table)
+        return True
+
+    elif agent == "commander":
+        from archangel.events import CommanderAgent, EventBus
+        CommanderAgent(EventBus.get_instance())
+        console.print("[green]✓ Connected to archangel.commander[/]")
+        console.print("  [dim]Status:[/] Commander orchestrator ready.")
+        return True
+
+    elif agent == "storage":
+        from archangel.storage import StorageBackend
+        st = StorageBackend.get_instance()
+        count = st.get_lead_count()
+        console.print("[green]✓ Connected to archangel.storage[/]")
+        console.print(f"  [bold]Active Database Leads:[/] {count}")
+        return True
+
+    elif agent == "notification":
+        console.print("[green]✓ Connected to archangel.notification[/]")
+        console.print("  [dim]Status:[/] Messaging delivery channels active.")
+        return True
+
+    else:
+        console.print(f"[yellow]Unknown agent target: archangel.{agent}[/]")
+        return False
+
+
+def cmd_help_detailed(console: Console) -> bool:
+    """Print full detailed reference documentation for all commands and agents."""
+    console.print()
+    console.print(Panel.fit(
+        "[bold cyan]⚔ Archangel — Detailed Command & Agent Reference Manual[/]",
+        border_style="cyan"
+    ))
+
+    help_text = """\
+[bold yellow]STARTUP & CONTROL COMMANDS[/]
+
+  [bold green]archangel summon[/] (or plain [bold green]archangel[/])
+    Summons and initializes the platform core engine, event bus, database, loggers,
+    and agent subsystems. (Note: Telegram bridge is NOT auto-started).
+
+  [bold green]start telegram[/] (or [bold green]archangel start telegram[/] / [bold green]telegram start[/] / [bold green]archangel start-telegram[/])
+    Starts the interactive Telegram remote operations bridge on demand. Checks if the bridge
+    is already running in another terminal window/process and notifies you if active.
+
+  [bold green]archangel terminate[/] (or [bold green]exit[/] / [bold green]quit[/] in REPL)
+    Gracefully stops background tasks, flushes database queues, and terminates.
+
+[bold yellow]OPERATION & DIAGNOSTIC COMMANDS[/]
+
+  [bold green]archangel status[/] [--json]
+    Displays real-time status of runtime engine, storage database count, and agent states.
+
+  [bold green]archangel scan[/]
+    Executes a high-speed one-time scan across all configured sources (Reddit, X, RSS, etc.),
+    runs parallel AI analysis, scores leads, and persists results.
+
+  [bold green]archangel doctor[/]
+    Runs system diagnostics on dependencies, API keys, storage, and plugin permissions.
+
+  [bold green]archangel config[/] [edit | validate]
+    Inspects, validates, or opens user YAML configuration files in your editor.
+
+  [bold green]archangel export[/] [--format csv|json|md, --output PATH, --limit N]
+    Exports identified leads to external files.
+
+  [bold green]archangel logs[/] [--tail N, --follow]
+    Views live runtime log files.
+
+  [bold green]archangel purge[/] [--yes]
+    Cleans local temporary cache artifacts while preserving user data.
+
+  [bold green]help detailed[/] (or [bold green]archangel --help detailed[/] / [bold green]archangel help detailed[/])
+    Displays this full detailed reference manual.
+
+[bold yellow]AGENT SUBSYSTEM DIRECTIVES (archangel.<agent>)[/]
+
+You can speak to or query specific agent subsystems directly in CLI or REPL mode:
+
+  [bold cyan]archangel.collector[/]   (or [bold cyan]collector[/])    - Query or run collector data discovery
+  [bold cyan]archangel.intelligence[/] (or [bold cyan]intelligence[/]) - Directly query AI reasoning engine
+  [bold cyan]archangel.scoring[/]      (or [bold cyan]scoring[/])      - Inspect lead ranking metrics & rules
+  [bold cyan]archangel.guardian[/]     (or [bold cyan]guardian[/])     - View detailed component health metrics
+  [bold cyan]archangel.commander[/]    (or [bold cyan]commander[/])    - Inspect orchestrator registered states
+  [bold cyan]archangel.storage[/]      (or [bold cyan]storage[/])      - Query SQLite database lead counts
+  [bold cyan]archangel.notification[/]  (or [bold cyan]notification[/]) - Inspect message delivery status
+
+[bold yellow]EXAMPLES[/]
+  $ archangel start telegram
+  $ archangel.intelligence "Need Python automation developer for scraping project"
+  $ archangel help detailed
+"""
+    console.print(help_text)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # REPL help
 # ---------------------------------------------------------------------------
@@ -688,22 +869,156 @@ def cmd_registry_info(console: Console, name: str) -> bool:
 _REPL_HELP = """\
 [bold cyan]Available commands:[/]
 
-  [green]status[/]     Display runtime information and agent health
-  [green]watch[/]      Live event stream
-  [green]scan[/]       One-time scan (collect, analyse, score)
-  [green]doctor[/]     Run system diagnostics
-  [green]config[/]     Inspect / validate configuration
-  [green]export[/]     Export leads  (--format csv|json|md, --output PATH, --limit N)
-  [green]logs[/]       View runtime logs  (--tail N, --follow, --level LEVEL)
-  [green]purge[/]      Clean cache  (--yes to confirm)
-  [green]update[/]     Check for plugin updates
-  [green]registry[/]   List or inspect plugins  (--enabled, --disabled, --category, info <name>)
-  [green]chat[/]       Open the AI chat REPL
-  [green]clear[/]      Clear the terminal screen
-  [green]version[/]    Display version
-  [green]help[/]       Show this help message
-  [green]exit[/green]/[green]quit[/]  Shut down and exit
+  [green]status[/]          Display runtime information and agent health
+  [green]start telegram[/]  Start the interactive Telegram remote control bridge
+  [green]watch[/]           Live event stream
+  [green]scan[/]            One-time scan (collect, analyse, score)
+  [green]doctor[/]          Run system diagnostics
+  [green]config[/]          Inspect / validate configuration
+  [green]export[/]          Export leads  (--format csv|json|md, --output PATH, --limit N)
+  [green]logs[/]            View runtime logs  (--tail N, --follow, --level LEVEL)
+  [green]purge[/]           Clean cache  (--yes to confirm)
+  [green]update[/]          Check for plugin updates
+  [green]registry[/]        List or inspect plugins  (--enabled, --disabled, --category, info <name>)
+  [green]chat[/]            Open the AI chat REPL
+  [green]clear[/]           Clear the terminal screen
+  [green]version[/]         Display version
+  [green]help detailed[/]   Display full detailed manual & agent directives
+  [green]exit[/green]/[green]quit[/]       Shut down and exit
+
+[dim]Speak to specific agents: archangel.collector, archangel.intelligence, archangel.guardian, etc.[/dim]
 """
+
+
+def _execute_repl_command(console: Console, segment: str) -> bool:
+    """Parse and dispatch a single REPL command string. Returns True to keep REPL running, False to terminate."""
+    segment = segment.strip()
+    if not segment:
+        return True
+
+    lowered = segment.lower()
+    if lowered in ("start telegram", "telegram start", "start-telegram"):
+        cmd_start_telegram(console)
+        return True
+
+    if lowered in ("help detailed", "help --detailed", "--help detailed"):
+        cmd_help_detailed(console)
+        return True
+
+    try:
+        _parts = shlex.split(segment)
+    except Exception:
+        _parts = segment.split()
+
+    if not _parts:
+        return True
+
+    _cmd = _parts[0].lower()
+    _args = _parts[1:]
+
+    def _flag(name: str) -> bool:
+        return f"--{name}" in _args
+
+    def _opt(name: str) -> str | None:
+        for i, a in enumerate(_args):
+            if a == f"--{name}" and i + 1 < len(_args):
+                return _args[i + 1]
+        return None
+
+    if _cmd in ("exit", "quit"):
+        cmd_terminate(console)
+        return False
+
+    elif _cmd == "help":
+        if _args and _args[0].lower() in ("detailed", "--detailed"):
+            cmd_help_detailed(console)
+        else:
+            console.print(_REPL_HELP)
+
+    elif _cmd in ("start", "telegram"):
+        if _args and _args[0].lower() == "telegram":
+            cmd_start_telegram(console)
+        elif _cmd == "start" and not _args:
+            cmd_start_telegram(console)
+        else:
+            cmd_start_telegram(console)
+
+    elif _cmd.startswith("archangel.") or _cmd in (
+        "collector", "intelligence", "scoring", "guardian", "commander", "storage", "notification"
+    ):
+        action = _args[0] if _args else "status"
+        payload = " ".join(_args[1:]) if len(_args) > 1 else (" ".join(_args) if _args else "")
+        cmd_agent_dispatch(console, agent_name=_cmd, action=action, payload=payload)
+
+    elif _cmd == "status":
+        cmd_status(console, as_json=_flag("json"))
+
+    elif _cmd == "watch":
+        cmd_watch(console)
+
+    elif _cmd == "scan":
+        cmd_scan(console)
+
+    elif _cmd == "doctor":
+        cmd_doctor(console)
+
+    elif _cmd == "config":
+        valid_actions = ("edit", "validate")
+        action = _args[0] if _args and _args[0] in valid_actions else "edit"
+        section = _args[1] if len(_args) > 1 else None
+        cmd_config(console, action=action, section=section)
+
+    elif _cmd == "export":
+        fmt = _opt("format") or "json"
+        output = _opt("output")
+        limit_raw = _opt("limit")
+        limit = int(limit_raw) if limit_raw else None
+        cmd_export(console, fmt=fmt, output=output, limit=limit)
+
+    elif _cmd == "logs":
+        tail_raw = _opt("tail")
+        t = int(tail_raw) if tail_raw else 50
+        follow = _flag("follow")
+        level = _opt("level")
+        cmd_logs(console, tail=t, follow=follow, level=level)
+
+    elif _cmd == "purge":
+        cmd_purge(console, confirmed=_flag("yes"))
+
+    elif _cmd == "update":
+        cmd_update(console)
+
+    elif _cmd == "registry":
+        if _args and _args[0] == "info" and len(_args) >= 2:
+            cmd_registry_info(console, _args[1])
+        else:
+            cmd_registry_list(
+                console,
+                enabled=_flag("enabled"),
+                disabled=_flag("disabled"),
+                category=_opt("category"),
+            )
+
+    elif _cmd == "chat":
+        run_chat_repl(console)
+
+    elif _cmd == "automate":
+        task = " ".join(_args)
+        dry_run = _flag("dry-run")
+        max_steps = int(_opt("max-steps") or "50")
+        cmd_automate(console, task=task, dry_run=dry_run, max_steps=max_steps)
+
+    elif _cmd == "clear":
+        cmd_clear(console)
+
+    elif _cmd == "version":
+        cmd_version(console)
+
+    else:
+        console.print(f"[red]Unknown command:[/] {_cmd}")
+        console.print("Type [bold]help[/] or [bold]help detailed[/] for available commands.")
+
+    return True
 
 
 def _countdown_or_second_ctrl_c(console: Console, seconds: float = 3.0) -> bool:
@@ -832,84 +1147,11 @@ def _run_simple_repl(console: Console) -> None:
         if not raw:
             continue
 
-        # -- && chaining: split on && and execute each segment sequentially --
         for _segment in raw.split("&&"):
-            _segment = _segment.strip()
-            if not _segment:
-                continue
-
-            _parts = shlex.split(_segment)
-            _cmd = _parts[0].lower()
-            _args = _parts[1:]
-
-            def _flag(name: str) -> bool:
-                return f"--{name}" in _args
-
-            def _opt(name: str) -> str | None:
-                for i, a in enumerate(_args):
-                    if a == f"--{name}" and i + 1 < len(_args):
-                        return _args[i + 1]
-                return None
-
-            if _cmd in ("exit", "quit"):
-                cmd_terminate(console)
+            _keep_going = _execute_repl_command(console, _segment)
+            if not _keep_going:
                 _repl_down = True
                 break
-            elif _cmd == "help":
-                console.print(_REPL_HELP)
-            elif _cmd == "status":
-                cmd_status(console, as_json=_flag("json"))
-            elif _cmd == "watch":
-                cmd_watch(console)
-            elif _cmd == "scan":
-                cmd_scan(console)
-            elif _cmd == "doctor":
-                cmd_doctor(console)
-            elif _cmd == "config":
-                valid_actions = ("edit", "validate")
-                action = _args[0] if _args and _args[0] in valid_actions else "edit"
-                section = _args[1] if len(_args) > 1 else None
-                cmd_config(console, action=action, section=section)
-            elif _cmd == "export":
-                fmt = _opt("format") or "json"
-                output = _opt("output")
-                limit_raw = _opt("limit")
-                limit = int(limit_raw) if limit_raw else None
-                cmd_export(console, fmt=fmt, output=output, limit=limit)
-            elif _cmd == "logs":
-                tail_raw = _opt("tail")
-                t = int(tail_raw) if tail_raw else 50
-                follow = _flag("follow")
-                level = _opt("level")
-                cmd_logs(console, tail=t, follow=follow, level=level)
-            elif _cmd == "purge":
-                cmd_purge(console, confirmed=_flag("yes"))
-            elif _cmd == "update":
-                cmd_update(console)
-            elif _cmd == "registry":
-                if _args and _args[0] == "info" and len(_args) >= 2:
-                    cmd_registry_info(console, _args[1])
-                else:
-                    cmd_registry_list(
-                        console,
-                        enabled=_flag("enabled"),
-                        disabled=_flag("disabled"),
-                        category=_opt("category"),
-                    )
-            elif _cmd == "chat":
-                run_chat_repl(console)
-            elif _cmd == "automate":
-                task = " ".join(_args)
-                dry_run = _flag("dry-run")
-                max_steps = int(_opt("max-steps") or "50")
-                cmd_automate(console, task=task, dry_run=dry_run, max_steps=max_steps)
-            elif _cmd == "clear":
-                cmd_clear(console)
-            elif _cmd == "version":
-                cmd_version(console)
-            else:
-                console.print(f"[red]Unknown command:[/] {_cmd}")
-                console.print("Type [bold]help[/] for available commands.")
         if _repl_down:
             break
 
@@ -1004,105 +1246,11 @@ def run_repl(console: Console) -> None:
             if not raw:
                 continue
 
-            parts = shlex.split(raw)
-            cmd = parts[0].lower()
-            args = parts[1:]
-
-            # -- && chaining: split on && and execute each segment sequentially --
             for _segment in raw.split("&&"):
-                _segment = _segment.strip()
-                if not _segment:
-                    continue
-
-                _parts = shlex.split(_segment)
-                _cmd = _parts[0].lower()
-                _args = _parts[1:]
-
-                def _flag(name: str) -> bool:
-                    return f"--{name}" in _args
-
-                def _opt(name: str) -> str | None:
-                    for i, a in enumerate(_args):
-                        if a == f"--{name}" and i + 1 < len(_args):
-                            return _args[i + 1]
-                    return None
-
-                # -- dispatch --
-                if _cmd in ("exit", "quit"):
-                    cmd_terminate(console)
+                _keep_going = _execute_repl_command(console, _segment)
+                if not _keep_going:
                     _repl_down = True
                     break
-
-                elif _cmd == "help":
-                    console.print(_REPL_HELP)
-
-                elif _cmd == "status":
-                    cmd_status(console, as_json=_flag("json"))
-
-                elif _cmd == "watch":
-                    cmd_watch(console)
-
-                elif _cmd == "scan":
-                    cmd_scan(console)
-
-                elif _cmd == "doctor":
-                    cmd_doctor(console)
-
-                elif _cmd == "config":
-                    valid_actions = ("edit", "validate")
-                    action = _args[0] if _args and _args[0] in valid_actions else "edit"
-                    section = _args[1] if len(_args) > 1 else None
-                    cmd_config(console, action=action, section=section)
-
-                elif _cmd == "export":
-                    fmt = _opt("format") or "json"
-                    output = _opt("output")
-                    limit_raw = _opt("limit")
-                    limit = int(limit_raw) if limit_raw else None
-                    cmd_export(console, fmt=fmt, output=output, limit=limit)
-
-                elif _cmd == "logs":
-                    tail_raw = _opt("tail")
-                    t = int(tail_raw) if tail_raw else 50
-                    follow = _flag("follow")
-                    level = _opt("level")
-                    cmd_logs(console, tail=t, follow=follow, level=level)
-
-                elif _cmd == "purge":
-                    cmd_purge(console, confirmed=_flag("yes"))
-
-                elif _cmd == "update":
-                    cmd_update(console)
-
-                elif _cmd == "registry":
-                    if _args and _args[0] == "info" and len(_args) >= 2:
-                        cmd_registry_info(console, _args[1])
-                    else:
-                        cmd_registry_list(
-                            console,
-                            enabled=_flag("enabled"),
-                            disabled=_flag("disabled"),
-                            category=_opt("category"),
-                        )
-
-                elif _cmd == "chat":
-                    run_chat_repl(console)
-
-                elif _cmd == "automate":
-                    task = " ".join(_args)
-                    dry_run = _flag("dry-run")
-                    max_steps = int(_opt("max-steps") or "50")
-                    cmd_automate(console, task=task, dry_run=dry_run, max_steps=max_steps)
-
-                elif _cmd == "clear":
-                    cmd_clear(console)
-
-                elif _cmd == "version":
-                    cmd_version(console)
-
-                else:
-                    console.print(f"[red]Unknown command:[/] {_cmd}")
-                    console.print("Type [bold]help[/] for available commands.")
             if _repl_down:
                 break
 
@@ -1808,6 +1956,103 @@ def info(name: str) -> None:
     cmd_registry_info(_console, name=name)
 
 
+# --- Start & Telegram Commands ---
+
+@cli.group(invoke_without_command=True)
+@click.argument("target", required=False, default="telegram")
+@click.pass_context
+def start(ctx: click.Context, target: str) -> None:
+    """Start background services or plugins (e.g. archangel start telegram)."""
+    if ctx.invoked_subcommand is None:
+        if target.lower() == "telegram":
+            cmd_start_telegram(_console)
+        else:
+            _console.print(f"[yellow]Unknown start target: {target}[/]")
+
+
+@start.command("telegram")
+def start_telegram_cmd() -> None:
+    """Start the interactive Telegram remote control bridge."""
+    cmd_start_telegram(_console)
+
+
+@cli.group(invoke_without_command=True)
+@click.pass_context
+def telegram(ctx: click.Context) -> None:
+    """Telegram remote control bridge commands."""
+    if ctx.invoked_subcommand is None:
+        cmd_start_telegram(_console)
+
+
+@telegram.command("start")
+def telegram_start_subcmd() -> None:
+    """Start the Telegram bridge."""
+    cmd_start_telegram(_console)
+
+
+@cli.command("start-telegram")
+def start_telegram_alias() -> None:
+    """Start the Telegram remote control bridge."""
+    cmd_start_telegram(_console)
+
+
+# --- Help & Agent Directives ---
+
+@cli.command("help")
+@click.argument("topic", required=False, default=None)
+@click.option("--detailed", is_flag=True, help="Display full detailed command & agent manual.")
+def help_command(topic: str | None, detailed: bool) -> None:
+    """Display Archangel command & agent reference documentation."""
+    if detailed or (topic and topic.lower() == "detailed"):
+        cmd_help_detailed(_console)
+    else:
+        _console.print(_REPL_HELP)
+
+
+@cli.command("collector")
+@click.argument("action", default="status", required=False)
+def agent_collector(action: str) -> None:
+    """Interact directly with archangel.collector agent."""
+    cmd_agent_dispatch(_console, "collector", action)
+
+
+@cli.command("intelligence")
+@click.argument("payload", required=False, default="")
+def agent_intelligence(payload: str) -> None:
+    """Interact directly with archangel.intelligence reasoning agent."""
+    cmd_agent_dispatch(_console, "intelligence", "analyze", payload)
+
+
+@cli.command("scoring")
+def agent_scoring() -> None:
+    """Interact directly with archangel.scoring agent."""
+    cmd_agent_dispatch(_console, "scoring")
+
+
+@cli.command("guardian")
+def agent_guardian() -> None:
+    """Interact directly with archangel.guardian component health monitor."""
+    cmd_agent_dispatch(_console, "guardian")
+
+
+@cli.command("commander")
+def agent_commander() -> None:
+    """Interact directly with archangel.commander orchestrator."""
+    cmd_agent_dispatch(_console, "commander")
+
+
+@cli.command("storage")
+def agent_storage() -> None:
+    """Interact directly with archangel.storage backend agent."""
+    cmd_agent_dispatch(_console, "storage")
+
+
+@cli.command("notification")
+def agent_notification() -> None:
+    """Interact directly with archangel.notification delivery agent."""
+    cmd_agent_dispatch(_console, "notification")
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
@@ -1815,6 +2060,13 @@ def info(name: str) -> None:
 def main() -> None:
     """Console-script entrypoint (``archangel``)."""
     ensure_user_path_registered()
+
+    # Intercept --help detailed or help detailed
+    argv_lower = [a.lower() for a in sys.argv[1:]]
+    if "detailed" in argv_lower and ("help" in argv_lower or "--help" in argv_lower or "-h" in argv_lower):
+        cmd_help_detailed(_console)
+        sys.exit(0)
+
     try:
         cli(prog_name="archangel")
     except click.ClickException:
@@ -1838,3 +2090,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

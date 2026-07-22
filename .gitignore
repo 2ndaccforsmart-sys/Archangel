@@ -27,6 +27,7 @@ data/*.csv
 data/*.tmp
 data/*.cache
 data/.archangel_*
+data/.*_pid
 
 # Config overrides (user-specific)
 configs/local.yaml
