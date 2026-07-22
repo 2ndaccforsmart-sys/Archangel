@@ -1044,7 +1044,6 @@ These should be implemented as extensions, not architectural rewrites.
 | Repository | `docs/04-Repository.md` |
 | Pipeline | `docs/05-Pipeline.md` |
 | Plugins | `docs/06-Plugin-System.md` |
-| Configuration | `docs/07-Configuration.md` |
 | Roadmap | `docs/08-Roadmap.md` |
 
 ---

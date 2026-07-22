@@ -486,8 +486,6 @@ docs/
 
 06-Plugin-System.md
 
-07-Configuration.md
-
 08-Roadmap.md
 
 diagrams/
