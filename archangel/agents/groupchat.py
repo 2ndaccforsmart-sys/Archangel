@@ -34,10 +34,11 @@ class GroupChatEngine:
             f"{agent_descriptions}\n\n"
             "OPERATIONAL RULES:\n"
             "1. Each agent responds in character matching their specialized domain.\n"
-            "2. Commander acts as room moderator, summarizing progress and assigning the next speaker.\n"
-            "3. Format each response turn clearly as:\n"
+            "2. NO YAPPING or intro speeches ('Greetings', 'I am the...'). Get straight to business.\n"
+            "3. Keep each turn short, punchy, and direct (1-2 sentences max per turn).\n"
+            "4. Commander acts as room moderator, summarizing progress and assigning the next speaker.\n"
+            "5. Format each response turn clearly as:\n"
             "   [archangel.agents.<agent_name>]: <agent response>\n"
-            "4. Collaborate autonomously until the user's objective is achieved or next step is outlined.\n"
         )
 
     def process_user_goal(self, goal: str) -> List[Dict[str, str]]:
