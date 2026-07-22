@@ -756,9 +756,115 @@ AGENT_SYSTEM_PROMPTS = {
 }
 
 
+def _classify_agent_topic(text: str) -> str:
+    """Classify user message topic and return matching agent name."""
+    t = text.lower()
+    if "@collector" in t or "collector" in t and ("feed" in t or "scrape" in t or "source" in t):
+        return "collector"
+    if "@intelligence" in t or "intelligence" in t and ("lead" in t or "intent" in t or "classify" in t):
+        return "intelligence"
+    if "@scoring" in t or "scoring" in t and ("rank" in t or "score" in t or "budget" in t or "urgency" in t):
+        return "scoring"
+    if "@guardian" in t or "guardian" in t and ("health" in t or "error" in t or "status" in t or "crash" in t):
+        return "guardian"
+    if "@commander" in t or "commander" in t and ("task" in t or "orchestrat" in t or "run" in t):
+        return "commander"
+    if "@storage" in t or "storage" in t and ("database" in t or "sqlite" in t or "count" in t or "export" in t):
+        return "storage"
+    if "@notification" in t or "notification" in t and ("telegram" in t or "discord" in t or "alert" in t):
+        return "notification"
+
+    # Secondary topic matching
+    if any(k in t for k in ("scrape", "rss", "reddit", "twitter", "tweet", "x.com", "html", "url", "web", "fetch")):
+        return "collector"
+    if any(k in t for k in ("database", "sqlite", "wal", "db", "table", "sql", "record", "save")):
+        return "storage"
+    if any(k in t for k in ("telegram", "discord", "webhook", "notify", "message", "alert", "bot")):
+        return "notification"
+    if any(k in t for k in ("health", "log", "error", "fail", "crash", "guardian", "monitor", "telemetry")):
+        return "guardian"
+    if any(k in t for k in ("score", "rank", "urgent", "budget", "pricing", "priority")):
+        return "scoring"
+    if any(k in t for k in ("task", "orchestrat", "commander", "agent", "state", "daemon", "process")):
+        return "commander"
+
+    return "intelligence"
+
+
+def run_agents_hub_repl(console: Console) -> None:
+    """Hub where all 7 agents are present. Messages are automatically routed to the matching agent."""
+    from dotenv import load_dotenv
+    load_dotenv(_get_project_root() / ".env", override=False)
+    from archangel.agents.chat import LLMClient
+
+    try:
+        llm = LLMClient()
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/]")
+        return
+
+    console.print()
+    console.print(Panel.fit(
+        "[bold cyan]🤖 archangel.agents — All Agents Active Hub[/]\n"
+        "[dim]All 7 Archangel agents are present. Type your request and it will automatically route to the matching agent.[/]\n"
+        "[italic #c0c0c0]Type exit, quit, or back to return to archangel.main>[/]",
+        border_style="cyan",
+    ))
+    console.print()
+
+    prompt_str = "archangel.agents> "
+
+    session = None
+    try:
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.history import FileHistory
+        hist_path = Path.home() / ".archangel_agents_hub_history"
+        hist_path.parent.mkdir(parents=True, exist_ok=True)
+        session = PromptSession(prompt_str, history=FileHistory(str(hist_path)))
+    except Exception:
+        pass
+
+    while True:
+        try:
+            if session:
+                raw = session.prompt()
+            else:
+                raw = input(prompt_str)
+        except (EOFError, KeyboardInterrupt):
+            console.print()
+            break
+
+        raw = raw.strip()
+        if not raw:
+            continue
+
+        if raw.lower() in ("exit", "quit", "back", "/exit", "/back"):
+            console.print()
+            break
+
+        target_agent = _classify_agent_topic(raw)
+        history = [
+            {"role": "system", "content": AGENT_SYSTEM_PROMPTS[target_agent]},
+            {"role": "user", "content": raw},
+        ]
+
+        try:
+            console.print(f"[dim]Routing subject to archangel.agents.{target_agent}...[/dim]")
+            llm.switch_provider(_cli_commands._active_model_provider)
+            resp = llm.chat(history)
+            console.print()
+            console.print(f"[bold cyan]archangel.agents.{target_agent}>[/]")
+            for line in resp.splitlines():
+                if line.strip():
+                    console.print(f"  {line}")
+            console.print()
+        except Exception as exc:
+            console.print(f"[red]Error from archangel.agents.{target_agent}: {exc}[/]")
+
+
 def run_agent_chat_repl(console: Console, agent_name: str) -> None:
     """Enter an interactive multi-turn AI chat mode with a specific agent persona."""
-    agent = agent_name.lower().replace("archangel.", "")
+    agent = agent_name.lower().replace("archangel.", "").replace("agents.", "")
     if agent not in AGENT_SYSTEM_PROMPTS:
         console.print(f"[yellow]Unknown agent persona: {agent_name}[/]")
         return
@@ -791,14 +897,14 @@ def run_agent_chat_repl(console: Console, agent_name: str) -> None:
 
     console.print()
     console.print(Panel.fit(
-        f"[bold cyan]🤖 archangel.{agent} — Interactive Agent Chat[/]\n"
-        f"[dim]Freely talk, ask questions, or issue instructions to archangel.{agent}.[/]\n"
+        f"[bold cyan]🤖 archangel.agents.{agent} — Interactive Agent Chat[/]\n"
+        f"[dim]Freely talk, ask questions, or issue instructions to archangel.agents.{agent}.[/]\n"
         f"[italic #c0c0c0]Type exit, quit, or back to return to archangel.main>[/]",
         border_style="cyan",
     ))
     console.print()
 
-    prompt_str = f"archangel.{agent}> "
+    prompt_str = f"archangel.agents.{agent}> "
 
     session = None
     try:
@@ -841,7 +947,7 @@ def run_agent_chat_repl(console: Console, agent_name: str) -> None:
 
             _exec_iterations += 1
             if _exec_iterations > 5:
-                console.print(f"[yellow]archangel.{agent}> Stopped after 5 iterations.[/]")
+                console.print(f"[yellow]archangel.agents.{agent}> Stopped after 5 iterations.[/]")
                 break
 
             history.append({"role": "assistant", "content": response_text})
@@ -852,16 +958,17 @@ def run_agent_chat_repl(console: Console, agent_name: str) -> None:
             display = re.sub(r"<pyautogui_call>.*?</pyautogui_call>", "", display, flags=re.DOTALL)
 
             console.print()
+            console.print(f"[bold cyan]archangel.agents.{agent}>[/]")
             for line in display.splitlines():
                 if line.strip():
-                    console.print(f"[bold cyan]archangel.{agent}>[/] {line}")
+                    console.print(f"  {line}")
             console.print()
 
             # Handle <search>...</search>
             queries = extract_search_queries(response_text)
             if queries:
                 for q in queries:
-                    console.print(f"[bold cyan]archangel.{agent}>[/] [dim]searching: {q}[/]")
+                    console.print(f"[bold cyan]archangel.agents.{agent}>[/] [dim]searching: {q}[/]")
                     search_output = WebSearch().search(q)
                     history.append({
                         "role": "user",
@@ -1157,6 +1264,9 @@ def _execute_repl_command(console: Console, segment: str) -> bool:
             cmd_start_telegram(console)
         else:
             cmd_start_telegram(console)
+
+    elif _cmd in ("agents", "archangel.agents", "archangel.agents.hub"):
+        run_agents_hub_repl(console)
 
     elif _cmd.startswith("archangel.") or _cmd in (
         "collector", "intelligence", "scoring", "guardian", "commander", "storage", "notification"
