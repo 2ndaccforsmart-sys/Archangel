@@ -38,8 +38,9 @@ class GroupChatEngine:
             "2. Keep each turn short, punchy, and direct (1-2 sentences max per turn).\n"
             "3. Limit the conversation to EXACTLY 2 to 4 agent responses (turns) per round. NEVER exceed 4 agent turns.\n"
             "4. NEVER FABRICATE OR HALLUCINATE FAKE LEADS, fake post titles, fake URLs, or fake filenames. Rely strictly on real scraped data or real system status.\n"
-            "5. Commander acts as room moderator, assigning the next speaker or concluding the task.\n"
-            "6. Format each response turn strictly as:\n"
+            "5. ALWAYS DISPLAY THE DIRECT CLICKABLE URL LINK (e.g. 🔗 https://reddit.com/r/...) for every lead found so the user can click it directly in their CLI terminal.\n"
+            "6. Commander acts as room moderator, assigning the next speaker or concluding the task.\n"
+            "7. Format each response turn strictly as:\n"
             "   [archangel.agents.<agent_name>]: <agent response>\n"
         )
 

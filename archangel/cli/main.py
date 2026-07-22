@@ -469,6 +469,98 @@ def cmd_export(console: Console, fmt: str = "json",
         return False
 
 
+def cmd_leads(console: Console, query: str | None = None, limit: int = 10) -> bool:
+    """Fetch live leads or display saved leads with direct clickable URLs in CLI."""
+    from archangel.storage import StorageBackend
+    from archangel.agents.scraper import SmartScraper
+    from archangel.models import RawPost, LeadAnalysis, LeadScore
+    import time
+
+    storage = StorageBackend.get_instance()
+
+    if not query or query.strip().lower() in ("list", "saved", "all"):
+        leads = storage.get_leads(limit=limit)
+        if not leads:
+            console.print("[yellow]No leads found in storage yet. Run [bold]leads <query>[/bold] to find live leads.[/]")
+            return True
+
+        console.print()
+        console.print(f"[bold cyan]📋 Saved Leads in Database ({len(leads)}):[/bold cyan]")
+        console.print()
+        for idx, l in enumerate(leads, 1):
+            score = l.get("score") or 0.0
+            title = l.get("content", "").split("\n")[0][:80] if l.get("content") else "Lead Opportunity"
+            url = l.get("url") or "N/A"
+            author = l.get("author") or "unknown"
+            source = l.get("source") or "web"
+
+            console.print(f"[bold green]{idx}. {title}[/bold green] [dim](Score: {score:.0f})[/dim]")
+            console.print(f"   🔗 [bold blue underline]{url}[/bold blue underline]")
+            console.print(f"   👤 Author: {author} | Source: {source}")
+            console.print()
+        return True
+
+    # Real Live Search Query
+    query = query.strip().strip('"').strip("'")
+    console.print()
+    console.print(f"[bold cyan]🔍 Searching live leads for: [bold white]\"{query}\"[/bold white]...[/bold cyan]")
+
+    scraper = SmartScraper()
+    posts = scraper.search_reddit(query, max_results=limit)
+
+    if not posts:
+        console.print(f"[yellow]No live leads found matching \"{query}\". Try a broader query like 'python developer'.[/]")
+        return True
+
+    console.print()
+    console.print(f"[bold green]✅ Found {len(posts)} live leads with direct links:[/bold green]")
+    console.print()
+
+    for idx, p in enumerate(posts, 1):
+        title = p.get("title") or "Opportunity"
+        url = p.get("url") or "N/A"
+        author = p.get("author") or "unknown"
+        sub = p.get("subreddit") or "reddit"
+        snippet = (p.get("content") or "").replace("\n", " ")[:150]
+
+        # Save to database
+        try:
+            raw_post = RawPost(
+                source="reddit",
+                channel=sub,
+                author=author,
+                content=f"{title}\n{snippet}",
+                timestamp=p.get("timestamp", time.time()),
+                url=url,
+            )
+            raw_id = storage.store_raw_post(raw_post)
+            if raw_id:
+                analysis = LeadAnalysis(
+                    raw_post_id=raw_id,
+                    is_lead=True,
+                    confidence=0.85,
+                    estimated_budget="Medium",
+                    urgency="High",
+                    category="automation",
+                    reasoning="Scraped via CLI leads command",
+                )
+                analysis_id = storage.store_analysis(analysis)
+                if analysis_id:
+                    score = LeadScore(analysis_id=analysis_id, score=85.0, confidence_score=0.85)
+                    storage.store_score(score)
+        except Exception:
+            pass
+
+        console.print(f"[bold cyan]{idx}. {title}[/bold cyan]")
+        console.print(f"   🔗 [bold blue underline]{url}[/bold blue underline]")
+        console.print(f"   👤 Author: u/{author} | Subreddit: r/{sub}")
+        if snippet:
+            console.print(f"   📝 [dim]{snippet}...[/dim]")
+        console.print()
+
+    return True
+
+
 def cmd_logs(console: Console, tail: int = 50, follow: bool = False,
              level: str | None = None) -> bool:
     """View runtime logs."""
@@ -1462,6 +1554,11 @@ def _execute_repl_command(console: Console, segment: str) -> bool:
     elif _cmd == "scan":
         cmd_scan(console)
 
+    elif _cmd == "leads":
+        query_str = " ".join(_args)
+        limit_val = int(_opt("limit") or "10")
+        cmd_leads(console, query=query_str, limit=limit_val)
+
     elif _cmd == "doctor":
         cmd_doctor(console)
 
@@ -2327,10 +2424,18 @@ def watch() -> None:
     cmd_watch(_console)
 
 
-@cli.command()
+@cli.command("scan")
 def scan() -> None:
     """One-time scan (collect, analyse, score — then exit)."""
     cmd_scan(_console)
+
+
+@cli.command("leads")
+@click.argument("query", required=False, default="")
+@click.option("--limit", default=10, help="Maximum number of leads to fetch or display.")
+def leads_cli_command(query: str, limit: int) -> None:
+    """Fetch live leads from Reddit/X or list saved database leads with direct clickable links."""
+    cmd_leads(_console, query=query, limit=limit)
 
 
 @cli.command()
