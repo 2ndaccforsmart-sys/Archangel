@@ -78,11 +78,14 @@ class GroupChatEngine:
         if any(k in goal_lower for k in ("find", "search", "get", "fetch", "scrape", "lead", "leads")):
             try:
                 scraper = SmartScraper()
-                # Clean query
-                clean_q = goal_lower
-                for word in ("find", "search", "get", "fetch", "scrape", "leads", "lead", "on reddit", "on x", "score them", "save to storage", "5", "10"):
-                    clean_q = clean_q.replace(word, "")
-                clean_q = clean_q.strip() or "python"
+                # Clean query using word boundaries to prevent corrupting query terms
+                clean_q = re.sub(
+                    r'\b(?:find|search|get|fetch|scrape|leads?|on reddit|on x|score them|save to storage|\d+)\b',
+                    '',
+                    goal_lower,
+                    flags=re.IGNORECASE,
+                )
+                clean_q = re.sub(r'\s+', ' ', clean_q).strip() or "python"
 
                 reddit_posts = scraper.search_reddit(clean_q, max_results=5)
                 if reddit_posts:

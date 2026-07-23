@@ -108,7 +108,11 @@ Return ONLY valid JSON:
         return results
 
     def _parse_response(self, response: str) -> dict:
-        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if not response or not isinstance(response, str):
+            return {}
+        # Strip markdown code fences if present
+        clean_text = re.sub(r'```(?:json)?\s*(.*?)\s*```', r'\1', response, flags=re.DOTALL).strip()
+        json_match = re.search(r'\{.*\}', clean_text, re.DOTALL)
         if json_match:
             try:
                 return json.loads(json_match.group())
@@ -116,3 +120,4 @@ Return ONLY valid JSON:
                 pass
         logger.warning("Could not parse LLM response as JSON: %.200s", response)
         return {}
+

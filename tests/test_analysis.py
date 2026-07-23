@@ -54,3 +54,19 @@ def test_json_parse_fallback():
     agent = IntelligenceAgent()
     parsed = agent._parse_response("Sorry, I cannot help with this text.")
     assert parsed == {}
+
+
+def test_json_parse_markdown_fence():
+    agent = IntelligenceAgent()
+    response_with_fence = """Here is your JSON response:
+```json
+{
+    "is_lead": true,
+    "confidence": 0.95
+}
+```
+    """
+    parsed = agent._parse_response(response_with_fence)
+    assert parsed.get("is_lead") is True
+    assert parsed.get("confidence") == 0.95
+

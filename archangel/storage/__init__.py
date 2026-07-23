@@ -104,6 +104,17 @@ class StorageBackend:
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (analysis_id) REFERENCES lead_analyses(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS lead_sources (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    canonical_lead_id INTEGER NOT NULL,
+                    raw_post_id INTEGER NOT NULL UNIQUE,
+                    merged_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    confidence REAL,
+                    merge_reason TEXT,
+                    tier_used TEXT,
+                    FOREIGN KEY (raw_post_id) REFERENCES raw_posts(id)
+                );
             """)
             self._conn.commit()
 
@@ -237,6 +248,42 @@ class StorageBackend:
             except Exception as exc:
                 logger.error("lead_exists failed: %s", exc)
                 return False
+
+    def link_lead_source(
+        self,
+        canonical_lead_id: int,
+        raw_post_id: int,
+        confidence: float = 1.0,
+        merge_reason: str = "",
+        tier_used: str = "tier1",
+    ) -> int:
+        with self._write_lock:
+            cursor = self._conn.cursor()
+            try:
+                cursor.execute(
+                    """INSERT OR REPLACE INTO lead_sources
+                       (canonical_lead_id, raw_post_id, confidence, merge_reason, tier_used)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (canonical_lead_id, raw_post_id, confidence, merge_reason, tier_used),
+                )
+                self._conn.commit()
+                return cursor.lastrowid or 0
+            except Exception as exc:
+                logger.error("link_lead_source failed: %s", exc)
+                return 0
+
+    def get_lead_sources(self, canonical_lead_id: int) -> List[dict[str, Any]]:
+        with self._write_lock:
+            cursor = self._conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT * FROM lead_sources WHERE canonical_lead_id = ? ORDER BY merged_at ASC",
+                    (canonical_lead_id,),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+            except Exception as exc:
+                logger.error("get_lead_sources failed: %s", exc)
+                return []
 
     def close(self) -> None:
         with self._write_lock:
